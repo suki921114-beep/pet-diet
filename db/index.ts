@@ -3,7 +3,9 @@ import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "./schema";
 
 function requireEnv(name: string): string {
-  const value = process.env[name];
+  // Vercel 환경변수 입력창에 값을 붙여넣을 때 앞뒤 공백/줄바꿈이 함께
+  // 들어가는 실수가 흔해서(특히 토큰류), 항상 trim해서 사용한다.
+  const value = process.env[name]?.trim();
   if (!value) {
     throw new Error(
       `${name} 환경변수가 없어요. Vercel 프로젝트 설정(또는 로컬의 .env.local)에 Turso 데이터베이스 접속 정보를 추가해주세요.`,
@@ -17,7 +19,7 @@ let client: Client | null = null;
 function getClient(): Client {
   client ??= createClient({
     url: requireEnv("TURSO_DATABASE_URL"),
-    authToken: process.env.TURSO_AUTH_TOKEN,
+    authToken: process.env.TURSO_AUTH_TOKEN?.trim() || undefined,
   });
   return client;
 }
