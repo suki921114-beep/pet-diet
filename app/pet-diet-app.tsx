@@ -366,6 +366,41 @@ function defaultDatabase(): Database {
   };
 }
 
+// 설정 화면의 "전체 초기화"는 defaultDatabase()의 예시(사실상 실제 시드) 데이터로
+// 되돌아가지 않고, 반려동물 프로필까지 포함해 정말로 아무것도 없는 빈 상태로
+// 만들어야 한다. 그래서 별도의 빈 데이터 생성 함수를 둔다.
+function emptyDatabase(): Database {
+  return {
+    schemaVersion: 3,
+    pet: {
+      name: "",
+      birthdate: "",
+      sex: "female-neutered",
+      registrationNo: "",
+      weightKg: 0,
+      targetWeightKg: null,
+      activity: "normal",
+      condition: "none",
+      weightGoal: "maintain",
+      dailyTargetKcal: 0,
+      vetTargetKcal: null,
+      feedingsPerDay: 3,
+      fatLimitG: null,
+      naturalRatio: 100,
+      batchId: "",
+      dryFoodId: "",
+      photoDataUrl: null,
+    },
+    batches: [],
+    dryFoods: [],
+    medications: [],
+    feedLog: [],
+    medLog: [],
+    healthLog: [],
+    dailyPlans: {},
+  };
+}
+
 function toNumber(value: unknown, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -1520,11 +1555,21 @@ function HomePage({
   const target = todayPlan?.targetKcal ?? effectiveTarget(db.pet);
   const progress = target > 0 ? Math.min(100, (todayKcal / target) * 100) : 0;
   const medLogs = dateRecords(db.medLog, today);
-  const totalMedDoses = db.medications.reduce((sum, item) => sum + item.perDay, 0);
-  const nextMedication = db.medications.find(
-    (med) => medLogs.filter((row) => row.medicationId === med.id).length < med.perDay,
-  );
-  const completedMeds = medLogs.length;
+  // 약(med)과 영양제(supplement)를 하나로 묶어 "다음 항목" 하나만 고르면
+  // 둘 중 하나만 계속 화면에 보이게 된다. 메인 화면에는 두 종류를 각각
+  // 독립적으로 보여줘야 하므로 타입별로 따로 계산한다.
+  const meds = db.medications.filter((item) => item.type === "med");
+  const supplements = db.medications.filter((item) => item.type === "supplement");
+  const doneCountFor = (medication: Medication) =>
+    medLogs.filter((row) => row.medicationId === medication.id).length;
+  const nextMed = meds.find((item) => doneCountFor(item) < item.perDay);
+  const nextSupplement = supplements.find((item) => doneCountFor(item) < item.perDay);
+  const totalMedDoses = meds.reduce((sum, item) => sum + item.perDay, 0);
+  const totalSupplementDoses = supplements.reduce((sum, item) => sum + item.perDay, 0);
+  const medIds = new Set(meds.map((item) => item.id));
+  const supplementIds = new Set(supplements.map((item) => item.id));
+  const completedMeds = medLogs.filter((row) => medIds.has(row.medicationId)).length;
+  const completedSupplements = medLogs.filter((row) => supplementIds.has(row.medicationId)).length;
   // datetime은 분 단위(HH:MM)까지만 기록되어 같은 분 안에 여러 메모를 남기면
   // 값이 동일해질 수 있다. 이럴 때도 항상 "가장 나중에 입력한" 메모가 위에
   // 오도록 배열 인덱스를 2차 기준으로 사용해 정렬한다.
@@ -1631,41 +1676,78 @@ function HomePage({
           </div>
         </section>
 
-        <section className="hero-action-card medicine-card">
-          <div className="action-copy">
-            <span className="eyebrow">약 · 영양제</span>
-            {nextMedication ? (
-              <>
-                <h2>{nextMedication.name}</h2>
-                <p>{nextMedication.dose || `하루 ${nextMedication.perDay}회`}</p>
-                <button className="button ink" onClick={() => takeMedication(nextMedication)}>
-                  <Check size={18} />
-                  이번 회차 완료
-                </button>
-              </>
-            ) : (
-              <>
-                <h2>{db.medications.length ? "오늘 모두 완료" : "등록된 약이 없어요"}</h2>
-                <button className="button secondary" onClick={() => open("supplements")}>
-                  관리하기
-                </button>
-              </>
-            )}
-          </div>
-          <button
-            className="hero-icon medicine-icon"
-            aria-label="약 급여 체크"
-            onClick={() => (nextMedication ? takeMedication(nextMedication) : open("supplements"))}
-          >
-            <Pill size={58} strokeWidth={1.6} />
-          </button>
-          <div className="wide-progress">
-            <ProgressSegments done={completedMeds} total={totalMedDoses || 1} />
-            <span>
-              {completedMeds}/{totalMedDoses || 0}회 완료
-            </span>
-          </div>
-        </section>
+        <div className="medicine-cards-row">
+          <section className="hero-action-card medicine-card compact">
+            <div className="action-copy">
+              <span className="eyebrow">약</span>
+              {nextMed ? (
+                <>
+                  <h2>{nextMed.name}</h2>
+                  <p>{nextMed.dose || `하루 ${nextMed.perDay}회`}</p>
+                  <button className="button ink small" onClick={() => takeMedication(nextMed)}>
+                    <Check size={16} />
+                    완료
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2>{meds.length ? "오늘 모두 완료" : "등록된 약이 없어요"}</h2>
+                  <button className="button secondary small" onClick={() => open("meds")}>
+                    관리하기
+                  </button>
+                </>
+              )}
+            </div>
+            <button
+              className="hero-icon medicine-icon"
+              aria-label="약 급여 체크"
+              onClick={() => (nextMed ? takeMedication(nextMed) : open("meds"))}
+            >
+              <Pill size={38} strokeWidth={1.6} />
+            </button>
+            <div className="wide-progress">
+              <ProgressSegments done={completedMeds} total={totalMedDoses || 1} />
+              <span>
+                {completedMeds}/{totalMedDoses || 0}회 완료
+              </span>
+            </div>
+          </section>
+          <section className="hero-action-card medicine-card compact">
+            <div className="action-copy">
+              <span className="eyebrow">영양제</span>
+              {nextSupplement ? (
+                <>
+                  <h2>{nextSupplement.name}</h2>
+                  <p>{nextSupplement.dose || `하루 ${nextSupplement.perDay}회`}</p>
+                  <button className="button ink small" onClick={() => takeMedication(nextSupplement)}>
+                    <Check size={16} />
+                    완료
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2>{supplements.length ? "오늘 모두 완료" : "등록된 영양제가 없어요"}</h2>
+                  <button className="button secondary small" onClick={() => open("supplements")}>
+                    관리하기
+                  </button>
+                </>
+              )}
+            </div>
+            <button
+              className="hero-icon medicine-icon"
+              aria-label="영양제 급여 체크"
+              onClick={() => (nextSupplement ? takeMedication(nextSupplement) : open("supplements"))}
+            >
+              <Sparkles size={38} strokeWidth={1.6} />
+            </button>
+            <div className="wide-progress">
+              <ProgressSegments done={completedSupplements} total={totalSupplementDoses || 1} />
+              <span>
+                {completedSupplements}/{totalSupplementDoses || 0}회 완료
+              </span>
+            </div>
+          </section>
+        </div>
 
         <section className="quick-health-card">
           <div className="quick-health-head">
@@ -1833,15 +1915,16 @@ function PetPage({ db, open, back, home }: SharedProps) {
       <div className="page-content">
         <section className="pet-profile-card">
           <PetAvatar large photoUrl={db.pet.photoDataUrl} />
-          <h2>{db.pet.name}</h2>
+          <div className="pet-name-row">
+            <h2>{db.pet.name}</h2>
+            <IconButton label="반려동물 정보 수정" onClick={() => open("pet-edit")} className="pet-edit-button">
+              <Edit3 size={17} />
+            </IconButton>
+          </div>
           <p>
             {ageText(db.pet.birthdate)} ·{" "}
             {db.pet.sex === "female-neutered" ? "중성화 암컷" : "프로필 등록"}
           </p>
-          <button className="button secondary" onClick={() => open("pet-edit")}>
-            <Edit3 size={17} />
-            강아지 정보 수정
-          </button>
         </section>
         <section className="calorie-hero">
           <div className="flame-icon">
@@ -2008,6 +2091,10 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
   const [expiry, setExpiry] = useState("");
   const [finalWeight, setFinalWeight] = useState("");
   const [ingredientQuery, setIngredientQuery] = useState("");
+  const [manualKcal, setManualKcal] = useState("");
+  const [manualProtein, setManualProtein] = useState("");
+  const [manualFat, setManualFat] = useState("");
+  const [manualCarb, setManualCarb] = useState("");
   const ingredientMatches = ingredientQuery.trim()
     ? INGREDIENTS.filter((item) => item.name.includes(ingredientQuery.trim()))
     : [];
@@ -2029,6 +2116,27 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
   function addIngredientFromSearch(item: IngredientLine) {
     setLines((current) => [...current, { ...item, grams: 0 }]);
     setIngredientQuery("");
+  }
+
+  function addManualIngredient() {
+    const trimmed = ingredientQuery.trim();
+    if (!trimmed) return;
+    setLines((current) => [
+      ...current,
+      {
+        name: trimmed,
+        grams: 0,
+        kcalPer100: Number(manualKcal) || 0,
+        protein: Number(manualProtein) || 0,
+        fat: Number(manualFat) || 0,
+        carb: Number(manualCarb) || 0,
+      },
+    ]);
+    setIngredientQuery("");
+    setManualKcal("");
+    setManualProtein("");
+    setManualFat("");
+    setManualCarb("");
   }
 
   function saveRecipe(event: FormEvent) {
@@ -2075,10 +2183,7 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
     <>
       <PageHeader title="자연식 만들기" onBack={back} onHome={home} />
       <form className="page-content form-page" onSubmit={saveRecipe}>
-        <SectionTitle
-          title="재료를 더해 레시피를 만드세요"
-          description="재료와 사용량을 입력하면 열량과 주요 영양 비율이 바로 누적됩니다."
-        />
+        <SectionTitle title="재료를 검색해주세요" />
         <div className="search-field ingredient-search">
           <Search size={20} />
           <input
@@ -2101,7 +2206,18 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
                   </button>
                 ))
               ) : (
-                <p className="ingredient-empty">일치하는 재료가 없어요.</p>
+                <div className="ingredient-manual">
+                  <p className="ingredient-empty">일치하는 재료가 없어요. 영양 정보를 직접 입력해 등록할 수 있어요.</p>
+                  <div className="manual-ingredient-grid">
+                    <label>kcal/100g<input type="number" min="0" step="0.1" value={manualKcal} onChange={(e) => setManualKcal(e.target.value)} placeholder="0" /></label>
+                    <label>단백질g<input type="number" min="0" step="0.1" value={manualProtein} onChange={(e) => setManualProtein(e.target.value)} placeholder="0" /></label>
+                    <label>지방g<input type="number" min="0" step="0.1" value={manualFat} onChange={(e) => setManualFat(e.target.value)} placeholder="0" /></label>
+                    <label>탄수화물g<input type="number" min="0" step="0.1" value={manualCarb} onChange={(e) => setManualCarb(e.target.value)} placeholder="0" /></label>
+                  </div>
+                  <button type="button" className="button secondary small full" onClick={addManualIngredient}>
+                    <Plus size={16} /> &quot;{ingredientQuery.trim()}&quot; 직접 추가
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -2247,7 +2363,7 @@ function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
     <>
       <PageHeader title="시중사료 관리" onBack={back} onHome={home} />
       <form className="page-content form-page" onSubmit={submit}>
-        <SectionTitle title="제품 정보를 등록하세요" description="라벨의 대사에너지 값이 있으면 그 값을 가장 먼저 사용합니다." />
+        <SectionTitle title="사료를 검색해주세요" />
         <section className="form-section">
           <label>제품명<input name="name" placeholder="예: 저지방 처방 건식사료" required /></label>
           <div className="field-grid">
@@ -2475,7 +2591,7 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
         }
       />
       <div className="page-content">
-        <SectionTitle title="몸의 작은 변화를 모아보세요" description="메인에서 쓴 한 줄 메모와 구조화된 기록이 함께 표시됩니다." />
+        <SectionTitle title="작은 변화를 기록해보세요" />
         {formOpen && (
           <form className="form-section health-form" onSubmit={submit}>
             <div className="field-grid">
@@ -2683,7 +2799,7 @@ function FeedingPlanPage({
     <>
       <PageHeader title="급여 계획" onBack={back} onHome={home} />
       <div className="page-content form-page">
-        <SectionTitle title="하루 목표와 급여원을 정하세요" description="저장한 설정은 오늘 계획 적용 버튼을 눌렀을 때 날짜별 스냅샷으로 고정됩니다." />
+        <SectionTitle title="하루 목표와 급여원을 정하세요" />
         <section className="form-section">
           <h2>열량과 횟수</h2>
           <div className="field-grid">
@@ -2772,8 +2888,8 @@ function SettingsPage({
         <section className="form-section danger-zone">
           <h2>전체 초기화</h2>
           <button className="button danger" onClick={() => {
-            if (!window.confirm("모든 기록을 초기화할까요? 되돌릴 수 없습니다.")) return;
-            updateDb(() => defaultDatabase(), "초기 예시 상태로 되돌렸어요.");
+            if (!window.confirm("모든 기록을 초기화할까요? 반려동물 프로필을 포함해 완전히 빈 상태가 되며, 되돌릴 수 없습니다.")) return;
+            updateDb(() => emptyDatabase(), "모든 데이터를 초기화했어요.");
           }}><Trash2 size={18} /> 모든 데이터 초기화</button>
         </section>
       </div>

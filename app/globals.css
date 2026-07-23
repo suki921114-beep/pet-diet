@@ -274,6 +274,42 @@ textarea:focus-visible {
   background: #efe7d6;
 }
 
+.medicine-cards-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.hero-action-card.compact {
+  grid-template-columns: 1fr 66px;
+  min-height: 172px;
+  padding: 14px;
+  border-radius: 22px;
+}
+
+.hero-action-card.compact .action-copy h2 {
+  margin: 4px 0 1px;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.hero-action-card.compact .action-copy p {
+  font-size: 11px;
+}
+
+.hero-action-card.compact .eyebrow {
+  font-size: 10px;
+}
+
+.hero-action-card.compact .hero-icon {
+  width: 56px;
+  height: 56px;
+}
+
+.hero-action-card.compact .button {
+  margin-top: 8px;
+}
+
 .action-copy {
   position: relative;
   z-index: 2;
@@ -808,6 +844,24 @@ textarea::placeholder {
   font-size: 24px;
 }
 
+.pet-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pet-name-row h2 {
+  margin: 14px 0 0;
+}
+
+.pet-edit-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
 .pet-profile-card p {
   margin: 2px 0 13px;
   color: var(--muted);
@@ -1010,6 +1064,30 @@ label {
   padding: 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.ingredient-manual {
+  display: grid;
+  gap: 8px;
+  padding: 4px 6px 8px;
+}
+
+.manual-ingredient-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.manual-ingredient-grid label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.manual-ingredient-grid input {
+  min-height: 38px;
+  font-size: 13px;
 }
 
 .ingredient-list {
