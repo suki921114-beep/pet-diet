@@ -69,7 +69,7 @@ type IngredientLine = {
   carb: number;
 };
 
-type Pet = {
+export type Pet = {
   name: string;
   birthdate: string;
   sex: "male" | "female" | "male-neutered" | "female-neutered";
@@ -89,7 +89,7 @@ type Pet = {
   photoDataUrl: string | null;
 };
 
-type Batch = {
+export type Batch = {
   id: string;
   name: string;
   dateMade: string;
@@ -103,7 +103,7 @@ type Batch = {
   recipe: IngredientLine[];
 };
 
-type DryFood = {
+export type DryFood = {
   id: string;
   name: string;
   totalWeight: number;
@@ -118,7 +118,7 @@ type DryFood = {
   moisture: number;
 };
 
-type Snack = {
+export type Snack = {
   id: string;
   name: string;
   totalWeight: number;
@@ -129,7 +129,7 @@ type Snack = {
   carb: number;
 };
 
-type Medication = {
+export type Medication = {
   id: string;
   type: "med" | "supplement";
   name: string;
@@ -142,7 +142,7 @@ type Medication = {
   memo: string;
 };
 
-type FeedRecord = {
+export type FeedRecord = {
   id: string;
   datetime: string;
   label: string;
@@ -165,14 +165,14 @@ type FeedRecord = {
   dryKcalPer100?: number;
 };
 
-type MedicationLog = {
+export type MedicationLog = {
   id: string;
   medicationId: string;
   datetime: string;
   stockUsed: number;
 };
 
-type HealthRecord = {
+export type HealthRecord = {
   id: string;
   datetime: string;
   weightKg: number | null;
@@ -185,7 +185,7 @@ type HealthRecord = {
   note: string;
 };
 
-type DailyPlan = {
+export type DailyPlan = {
   date: string;
   targetKcal: number;
   feedings: number;
@@ -200,7 +200,7 @@ type DailyPlan = {
   appliedAt: string;
 };
 
-type Database = {
+export type Database = {
   schemaVersion: number;
   pet: Pet;
   batches: Batch[];
@@ -285,14 +285,14 @@ function uid(prefix = "id") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function localDate(date = new Date()) {
+export function localDate(date = new Date()) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
 
-function localTime(date = new Date()) {
+export function localTime(date = new Date()) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
@@ -307,7 +307,7 @@ function fmt(value: number | null | undefined, digits = 0) {
 // 로그인 전/데이터가 없는 상태, 그리고 설정 화면의 "전체 초기화"는 예시(샘플)
 // 데이터가 아니라 반려동물 프로필까지 포함해 정말로 아무것도 없는 빈 상태여야
 // 한다. 그래서 빈 데이터를 만드는 함수를 하나만 둔다.
-function emptyDatabase(): Database {
+export function emptyDatabase(): Database {
   return {
     schemaVersion: 3,
     pet: {
@@ -340,12 +340,23 @@ function emptyDatabase(): Database {
   };
 }
 
-function toNumber(value: unknown, fallback = 0) {
+// 앱에서 쓰는 모든 수량(그램·kcal·재고·횟수 등)은 음수가 될 수 없다.
+// 유한하지 않은 값(NaN·Infinity)은 fallback으로, 음수는 0으로 강제해서
+// 저장 단계에서 음수 입력이 재고를 오히려 늘리거나 섭취 열량을 음수로
+// 만드는 걸 막는다.
+export function toNumber(value: unknown, fallback = 0) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed < 0 ? 0 : parsed;
 }
 
-function normalizeDatabase(raw: unknown): Database {
+// 컨트롤드 입력(state)에서 직접 Number()로 변환하는 지점(폼 제출을 거치지
+// 않는 실시간 입력)에도 동일한 규칙을 적용하기 위한 헬퍼.
+export function nonNegative(value: number) {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function normalizeDatabase(raw: unknown): Database {
   // 예시(사실상 실제 시드) 데이터가 아니라 빈 상태를 기준으로 정규화한다.
   // 그래야 로그인 전이나 데이터가 없는 상태에서 "봄이" 샘플이 섞여 들어가지 않는다.
   const base = emptyDatabase();
@@ -528,13 +539,13 @@ function ageText(birthdate: string) {
   return `${years}세 ${months ? `${months}개월` : ""}`.trim();
 }
 
-function effectiveTarget(pet: Pet) {
+export function effectiveTarget(pet: Pet) {
   return pet.vetTargetKcal && pet.vetTargetKcal > 0
     ? pet.vetTargetKcal
     : pet.dailyTargetKcal;
 }
 
-function merEstimate(pet: Pet) {
+export function merEstimate(pet: Pet) {
   const weight =
     pet.weightGoal === "loss" && pet.targetWeightKg
       ? pet.targetWeightKg
@@ -547,11 +558,11 @@ function merEstimate(pet: Pet) {
   return Math.round(rer * factor);
 }
 
-function remaining(total: number, used: number) {
+export function remaining(total: number, used: number) {
   return Math.max(0, total - used);
 }
 
-function planSettingsHash(db: Database) {
+export function planSettingsHash(db: Database) {
   const pet = db.pet;
   const batch = db.batches.find((item) => item.id === pet.batchId);
   const dry = db.dryFoods.find((item) => item.id === pet.dryFoodId);
@@ -569,7 +580,7 @@ function planSettingsHash(db: Database) {
   });
 }
 
-function createPlanSnapshot(db: Database, date: string): DailyPlan | null {
+export function createPlanSnapshot(db: Database, date: string): DailyPlan | null {
   const pet = db.pet;
   const batch = db.batches.find((item) => item.id === pet.batchId);
   const dry = db.dryFoods.find((item) => item.id === pet.dryFoodId);
@@ -767,6 +778,82 @@ function Toast({ message }: { message: string }) {
       {message}
     </div>
   );
+}
+
+// 급여 기록 하나를 삭제하거나 수정 전 상태로 되돌릴 때, 그 기록이 실제로
+// 차감했던 자연식/사료/간식 재고를 되돌려(direction=-1) 놓거나 다시
+// 차감(direction=1)하는 순수 함수. FeedEditor의 "수정"은 이 함수를
+// direction=-1(원래 기록 되돌리기) 다음 direction=1(새 값 재적용) 순서로
+// 두 번 호출해서 구현한다.
+export function restoreInventory(current: Database, record: FeedRecord, direction: -1 | 1): Database {
+  // 재고에서 실제로 빠진 양은 목표량과 급여량 중 더 큰 쪽으로 계산해 왔으므로
+  // 복원할 때도 동일하게 더 큰 쪽 기준으로 되돌린다.
+  const natural = Math.max(
+    record.naturalOfferedG ?? (record.source === "batch" ? record.offeredG : 0),
+    record.naturalEatenG ?? (record.source === "batch" ? record.eatenG : 0),
+  );
+  const dryAmount = Math.max(
+    record.dryOfferedG ?? (record.source === "dry" ? record.offeredG : 0),
+    record.dryEatenG ?? (record.source === "dry" ? record.eatenG : 0),
+  );
+  const snackAmount = record.source === "snack" ? Math.max(record.offeredG, record.eatenG) : 0;
+  return {
+    ...current,
+    batches: current.batches.map((item) =>
+      item.id === record.batchId
+        ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * natural) }
+        : item,
+    ),
+    dryFoods: current.dryFoods.map((item) =>
+      item.id === record.dryFoodId
+        ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * dryAmount) }
+        : item,
+    ),
+    snacks: current.snacks.map((item) =>
+      item.id === record.snackId
+        ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * snackAmount) }
+        : item,
+    ),
+  };
+}
+
+// 오늘 남은 끼니에 급여할 자연식/사료 양(그램)과 예상 kcal을 계산하는 순수
+// 함수. 오늘 이미 급여한 자연식/사료 양을 하루 목표량에서 뺀 "남은 양"을
+// 남은 끼니 수로 나누고, 오늘 먹인 간식 열량만큼은 미리 빼서(자연식:사료
+// 비율은 그대로 유지) 다음 급여량에 반영한다.
+export function computeNextServing(
+  todayPlan: DailyPlan | undefined,
+  todayFeeds: FeedRecord[],
+  completedPlanMeals: number,
+): { remainingMeals: number; naturalG: number; dryG: number; kcal: number } | null {
+  if (!todayPlan) return null;
+  const remainingMeals = Math.max(0, todayPlan.feedings - completedPlanMeals);
+  if (remainingMeals === 0) {
+    return { remainingMeals, naturalG: 0, dryG: 0, kcal: 0 };
+  }
+  const naturalFedG = todayFeeds.reduce(
+    (sum, item) => sum + (item.naturalEatenG ?? (item.source === "batch" ? item.eatenG : 0)),
+    0,
+  );
+  const dryFedG = todayFeeds.reduce(
+    (sum, item) => sum + (item.dryEatenG ?? (item.source === "dry" ? item.eatenG : 0)),
+    0,
+  );
+  const naturalRemainingG = Math.max(0, todayPlan.totalNaturalGrams - naturalFedG);
+  const dryRemainingG = Math.max(0, todayPlan.totalDryGrams - dryFedG);
+  const snackKcalToday = todayFeeds
+    .filter((item) => item.source === "snack")
+    .reduce((sum, item) => sum + item.calculatedKcal, 0);
+  const naturalRemainingKcal = (naturalRemainingG * todayPlan.naturalKcalPer100) / 100;
+  const dryRemainingKcal = (dryRemainingG * todayPlan.dryKcalPer100) / 100;
+  const remainingKcalTotal = naturalRemainingKcal + dryRemainingKcal;
+  const adjustedKcalTotal = Math.max(0, remainingKcalTotal - snackKcalToday);
+  const shrinkRatio = remainingKcalTotal > 0 ? adjustedKcalTotal / remainingKcalTotal : 0;
+  const naturalG = Math.round((naturalRemainingG * shrinkRatio) / remainingMeals);
+  const dryG = Math.round((dryRemainingG * shrinkRatio) / remainingMeals);
+  const kcal =
+    (naturalG * todayPlan.naturalKcalPer100) / 100 + (dryG * todayPlan.dryKcalPer100) / 100;
+  return { remainingMeals, kcal, naturalG, dryG };
 }
 
 export default function PetDietApp() {
@@ -1008,46 +1095,10 @@ export default function PetDietApp() {
   const planIsCurrent = todayPlan?.settingsHash === planSettingsHash(db);
   const completedPlanMeals = todayFeeds.filter((item) => item.source === "plan").length;
 
-  const nextServing = useMemo(() => {
-    if (!todayPlan) return null;
-    const remainingMeals = Math.max(0, todayPlan.feedings - completedPlanMeals);
-    if (remainingMeals === 0) {
-      return { remainingMeals, naturalG: 0, dryG: 0, kcal: 0 };
-    }
-    // 매 끼니 같은 비율로 나누지 않고, 오늘 이미 급여한 자연식/사료 양을
-    // 하루 목표량에서 뺀 "남은 양"을 남은 끼니 수로 나눈다.
-    // 그래야 한쪽 급여원(예: 사료)을 이미 다 줬을 때, 남은 끼니는
-    // 나머지 급여원(자연식) 위주로 자동으로 재분배된다.
-    const naturalFedG = todayFeeds.reduce(
-      (sum, item) => sum + (item.naturalEatenG ?? (item.source === "batch" ? item.eatenG : 0)),
-      0,
-    );
-    const dryFedG = todayFeeds.reduce(
-      (sum, item) => sum + (item.dryEatenG ?? (item.source === "dry" ? item.eatenG : 0)),
-      0,
-    );
-    const naturalRemainingG = Math.max(0, todayPlan.totalNaturalGrams - naturalFedG);
-    const dryRemainingG = Math.max(0, todayPlan.totalDryGrams - dryFedG);
-    // 간식은 계획된 급여원이 아니라 별도로 먹인 열량이라, 오늘 먹인 간식
-    // 열량만큼 "남은 목표 열량"에서 미리 빼고, 그 줄어든 열량을 원래 자연식:
-    // 사료 비율 그대로 다시 나눈다. 그래야 간식을 먹인 만큼 다음 급여가
-    // 자연스럽게 줄어들면서도, 자연식과 사료 사이의 원래 배합 비율(레시피
-    // 영양 균형)은 그대로 유지된다.
-    const snackKcalToday = todayFeeds
-      .filter((item) => item.source === "snack")
-      .reduce((sum, item) => sum + item.calculatedKcal, 0);
-    const naturalRemainingKcal = (naturalRemainingG * todayPlan.naturalKcalPer100) / 100;
-    const dryRemainingKcal = (dryRemainingG * todayPlan.dryKcalPer100) / 100;
-    const remainingKcalTotal = naturalRemainingKcal + dryRemainingKcal;
-    const adjustedKcalTotal = Math.max(0, remainingKcalTotal - snackKcalToday);
-    const shrinkRatio = remainingKcalTotal > 0 ? adjustedKcalTotal / remainingKcalTotal : 0;
-    // 저울은 소수점을 표시하지 않으므로 1회분 급여량도 정수 그램으로 반올림한다.
-    const naturalG = Math.round((naturalRemainingG * shrinkRatio) / remainingMeals);
-    const dryG = Math.round((dryRemainingG * shrinkRatio) / remainingMeals);
-    const kcal =
-      (naturalG * todayPlan.naturalKcalPer100) / 100 + (dryG * todayPlan.dryKcalPer100) / 100;
-    return { remainingMeals, kcal, naturalG, dryG };
-  }, [todayPlan, completedPlanMeals, todayFeeds]);
+  const nextServing = useMemo(
+    () => computeNextServing(todayPlan, todayFeeds, completedPlanMeals),
+    [todayPlan, completedPlanMeals, todayFeeds],
+  );
 
   if (!hydrated) {
     return (
@@ -1059,8 +1110,13 @@ export default function PetDietApp() {
     );
   }
 
-  function applyTodayPlan() {
-    const snapshot = createPlanSnapshot(db, today);
+  // petOverride를 받으면 화면에 아직 저장하지 않은 급여 계획 초안(draft)을
+  // 기준으로 스냅샷을 만들고, pet 저장과 오늘 계획 적용을 한 번의 updateDb로
+  // 원자적으로 처리한다. 이렇게 해야 "설정 저장을 누르지 않고 오늘 계획 적용을
+  // 눌렀을 때 화면에 보이는 값이 아니라 예전 저장값으로 적용되는" 문제가 없다.
+  function applyTodayPlan(petOverride?: Pet) {
+    const draftDb = petOverride ? { ...db, pet: petOverride } : db;
+    const snapshot = createPlanSnapshot(draftDb, today);
     if (!snapshot) {
       setToast("급여 계획에서 목표 열량과 급여원을 먼저 저장해주세요.");
       open("plan");
@@ -1075,6 +1131,7 @@ export default function PetDietApp() {
     updateDb(
       (current) => ({
         ...current,
+        pet: petOverride ?? current.pet,
         dailyPlans: { ...current.dailyPlans, [today]: snapshot },
       }),
       todayPlan ? "변경된 설정으로 오늘 계획을 업데이트했어요." : "오늘 급여 계획을 적용했어요.",
@@ -1157,38 +1214,6 @@ export default function PetDietApp() {
       "이번 끼니를 기록했어요.",
     );
     setFeedSheetOpen(false);
-  }
-
-  function restoreInventory(current: Database, record: FeedRecord, direction: -1 | 1) {
-    // 재고에서 실제로 빠진 양은 목표량과 급여량 중 더 큰 쪽으로 계산해 왔으므로
-    // 복원할 때도 동일하게 더 큰 쪽 기준으로 되돌린다.
-    const natural = Math.max(
-      record.naturalOfferedG ?? (record.source === "batch" ? record.offeredG : 0),
-      record.naturalEatenG ?? (record.source === "batch" ? record.eatenG : 0),
-    );
-    const dryAmount = Math.max(
-      record.dryOfferedG ?? (record.source === "dry" ? record.offeredG : 0),
-      record.dryEatenG ?? (record.source === "dry" ? record.eatenG : 0),
-    );
-    const snackAmount = record.source === "snack" ? Math.max(record.offeredG, record.eatenG) : 0;
-    return {
-      ...current,
-      batches: current.batches.map((item) =>
-        item.id === record.batchId
-          ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * natural) }
-          : item,
-      ),
-      dryFoods: current.dryFoods.map((item) =>
-        item.id === record.dryFoodId
-          ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * dryAmount) }
-          : item,
-      ),
-      snacks: current.snacks.map((item) =>
-        item.id === record.snackId
-          ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * snackAmount) }
-          : item,
-      ),
-    };
   }
 
   function deleteFeed(record: FeedRecord) {
@@ -1574,7 +1599,7 @@ function HomePage({
   planIsCurrent: boolean;
   completedPlanMeals: number;
   nextServing: { remainingMeals: number; naturalG: number; dryG: number; kcal: number } | null;
-  applyTodayPlan: () => void;
+  applyTodayPlan: (petOverride?: Pet) => void;
   recordPlannedMeal: () => void;
   openFeedSheet: () => void;
   openSnackSheet: () => void;
@@ -1670,7 +1695,7 @@ function HomePage({
             )}
             <div className="inline-actions">
               {!todayPlan || !planIsCurrent ? (
-                <button className="button primary" onClick={applyTodayPlan}>
+                <button className="button primary" onClick={() => applyTodayPlan()}>
                   {!todayPlan ? "설정한 계획 적용" : "변경된 설정 업데이트"}
                 </button>
               ) : nextServing && nextServing.remainingMeals > 0 ? (
@@ -1697,7 +1722,7 @@ function HomePage({
           <button
             className="hero-icon meal-icon"
             aria-label="이번 끼니 급여 완료"
-            onClick={todayPlan && nextServing?.remainingMeals ? recordPlannedMeal : applyTodayPlan}
+            onClick={todayPlan && nextServing?.remainingMeals ? recordPlannedMeal : () => applyTodayPlan()}
           >
             <UtensilsCrossed size={54} strokeWidth={1.65} />
           </button>
@@ -2064,11 +2089,11 @@ function PetEditPage({ db, updateDb, back, home }: SharedProps) {
           <div className="field-grid">
             <label>
               현재 체중(kg)
-              <input type="number" step="0.01" value={pet.weightKg} onChange={(e) => updateAndRecalc({ weightKg: Number(e.target.value) })} />
+              <input type="number" min="0" step="0.01" value={pet.weightKg} onChange={(e) => updateAndRecalc({ weightKg: nonNegative(Number(e.target.value)) })} />
             </label>
             <label>
               목표 체중(kg)
-              <input type="number" step="0.01" value={pet.targetWeightKg ?? ""} onChange={(e) => updateAndRecalc({ targetWeightKg: e.target.value ? Number(e.target.value) : null })} />
+              <input type="number" min="0" step="0.01" value={pet.targetWeightKg ?? ""} onChange={(e) => updateAndRecalc({ targetWeightKg: e.target.value ? nonNegative(Number(e.target.value)) : null })} />
             </label>
           </div>
           <label>
@@ -2098,11 +2123,11 @@ function PetEditPage({ db, updateDb, back, home }: SharedProps) {
           <div className="field-grid">
             <label>
               1일 목표 kcal
-              <input type="number" value={pet.dailyTargetKcal} onChange={(e) => setPet({ ...pet, dailyTargetKcal: Number(e.target.value) })} />
+              <input type="number" min="0" value={pet.dailyTargetKcal} onChange={(e) => setPet({ ...pet, dailyTargetKcal: nonNegative(Number(e.target.value)) })} />
             </label>
             <label>
               1일 급여 횟수
-              <input type="number" min="1" max="12" value={pet.feedingsPerDay} onChange={(e) => setPet({ ...pet, feedingsPerDay: Number(e.target.value) })} />
+              <input type="number" min="1" max="12" value={pet.feedingsPerDay} onChange={(e) => setPet({ ...pet, feedingsPerDay: Math.max(1, nonNegative(Number(e.target.value))) })} />
             </label>
           </div>
           <p className="form-note">
@@ -2145,7 +2170,7 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
     }),
     { weight: 0, kcal: 0, protein: 0, fat: 0, carb: 0 },
   );
-  const completedWeight = Number(finalWeight) || totals.weight;
+  const completedWeight = nonNegative(Number(finalWeight)) || totals.weight;
   const macroTotal = totals.protein * 4 + totals.fat * 9 + totals.carb * 4 || 1;
   const proteinDeg = (totals.protein * 4 * 360) / macroTotal;
   const fatDeg = (totals.fat * 9 * 360) / macroTotal;
@@ -2275,7 +2300,7 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
                   onChange={(e) =>
                     setLines((current) =>
                       current.map((item, i) =>
-                        i === index ? { ...item, grams: Number(e.target.value) } : item,
+                        i === index ? { ...item, grams: nonNegative(Number(e.target.value)) } : item,
                       ),
                     )
                   }
@@ -2355,7 +2380,7 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
   );
 }
 
-function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
+function DryFoodPage({ db, updateDb, back, home, setToast, today }: SharedProps) {
   // 보증 성분(조단백·조지방·조섬유·조회분·수분)을 입력하면 Modified Atwater
   // 방식으로 대사에너지를 자동 계산해 kcal 입력칸에 바로 반영한다. 사용자가
   // kcal 칸을 직접 수정하면 그 이후로는 자동 계산을 멈추고 입력값을 존중한다.
@@ -2464,7 +2489,19 @@ function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
             <div className="stack-row static" key={food.id}>
               <Bone size={19} />
               <span><strong>{food.name}</strong><small>{fmt(food.kcalPer100)}kcal/100g · 재고 {fmt(remaining(food.totalWeight, food.usedWeight))}g</small></span>
-              <button className="danger-link" onClick={() => updateDb((current) => ({ ...current, dryFoods: current.dryFoods.filter((item) => item.id !== food.id) }), "사료를 삭제했어요.")}>삭제</button>
+              <button
+                className="danger-link"
+                onClick={() => {
+                  const inUse = db.pet.dryFoodId === food.id || db.dailyPlans[today]?.dryFoodId === food.id;
+                  if (inUse) {
+                    setToast(`${food.name}은(는) 현재 급여 계획에 연결돼 있어 삭제할 수 없어요. 급여 계획에서 다른 사료로 바꾼 뒤 삭제해주세요.`);
+                    return;
+                  }
+                  updateDb((current) => ({ ...current, dryFoods: current.dryFoods.filter((item) => item.id !== food.id) }), "사료를 삭제했어요.");
+                }}
+              >
+                삭제
+              </button>
             </div>
           ))}
         </div>
@@ -2695,25 +2732,41 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
   const dryUsed = db.dryFoods.reduce((sum, item) => sum + item.usedWeight, 0);
   const snackTotal = db.snacks.reduce((sum, item) => sum + item.totalWeight, 0);
   const snackUsed = db.snacks.reduce((sum, item) => sum + item.usedWeight, 0);
-  const medStock = db.medications.filter((item) => item.type === "med").reduce((sum, item) => sum + item.stock, 0);
-  const suppStock = db.medications.filter((item) => item.type === "supplement").reduce((sum, item) => sum + item.stock, 0);
+  const meds = db.medications.filter((item) => item.type === "med");
+  const supplements = db.medications.filter((item) => item.type === "supplement");
+  // 약·영양제는 캡슐/정/포처럼 단위가 제품마다 달라서 재고를 하나의 %로
+  // 합산하면 의미가 없다(그래서 "재고가 하나라도 있으면 무조건 100%"처럼
+  // 왜곡돼 보였다). 대신 등록된 항목별 실제 수량을 그대로 보여준다.
+  const summaryCards: { label: string; icon: ReactNode; percentValue?: number; detail: ReactNode }[] = [
+    { label: "자연식", icon: <Beef />, percentValue: percent(naturalUsed, naturalTotal), detail: `${percent(naturalUsed, naturalTotal)}%` },
+    { label: "시중사료", icon: <Bone />, percentValue: percent(dryUsed, dryTotal), detail: `${percent(dryUsed, dryTotal)}%` },
+    { label: "간식", icon: <Cookie />, percentValue: percent(snackUsed, snackTotal), detail: `${percent(snackUsed, snackTotal)}%` },
+    {
+      label: "처방약",
+      icon: <Pill />,
+      detail: meds.length
+        ? meds.map((item) => `${item.name} ${fmt(item.stock, 1)}${item.stockUnit}`).join(" · ")
+        : "등록 없음",
+    },
+    {
+      label: "영양제",
+      icon: <Sparkles />,
+      detail: supplements.length
+        ? supplements.map((item) => `${item.name} ${fmt(item.stock, 1)}${item.stockUnit}`).join(" · ")
+        : "등록 없음",
+    },
+  ];
   return (
     <>
       <PageHeader title="재고 관리" onBack={back} onHome={home} />
       <div className="page-content">
         <SectionTitle title="남은 양을 한눈에 확인하세요" />
         <div className="inventory-grid">
-          {[
-            ["자연식", percent(naturalUsed, naturalTotal), <Beef key="n" />],
-            ["시중사료", percent(dryUsed, dryTotal), <Bone key="d" />],
-            ["간식", percent(snackUsed, snackTotal), <Cookie key="sn" />],
-            ["처방약", medStock > 0 ? 100 : 0, <Pill key="m" />],
-            ["영양제", suppStock > 0 ? 100 : 0, <Sparkles key="s" />],
-          ].map(([label, value, icon]) => (
-            <div className="inventory-summary" key={String(label)}>
-              <span className="menu-icon">{icon as ReactNode}</span>
-              <strong>{String(label)}</strong>
-              <b>{Number(value)}%</b>
+          {summaryCards.map((card) => (
+            <div className="inventory-summary" key={card.label}>
+              <span className="menu-icon">{card.icon}</span>
+              <strong>{card.label}</strong>
+              {card.percentValue !== undefined ? <b>{card.detail}</b> : <small className="inventory-summary-detail">{card.detail}</small>}
             </div>
           ))}
         </div>
@@ -2936,26 +2989,106 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
   );
 }
 
+// 하루치 kcal/목표를 계산하는 공용 함수. 주별/월별 집계가 이 값을 여러 날에
+// 걸쳐 평균 내는 방식으로 재사용한다.
+export function dayKcalAndTarget(db: Database, key: string) {
+  const feeds = dateRecords(db.feedLog, key);
+  return {
+    kcal: feeds.reduce((sum, item) => sum + item.calculatedKcal, 0),
+    target: db.dailyPlans[key]?.targetKcal ?? 0,
+  };
+}
+
 function StatsPage({ db, back, home }: SharedProps) {
   const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
-  const days = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - index));
-    const key = localDate(date);
-    const feeds = dateRecords(db.feedLog, key);
-    return {
-      key,
-      label: `${date.getMonth() + 1}/${date.getDate()}`,
-      kcal: feeds.reduce((sum, item) => sum + item.calculatedKcal, 0),
-      target: db.dailyPlans[key]?.targetKcal ?? 0,
-    };
-  });
-  const max = Math.max(1, ...days.map((item) => Math.max(item.kcal, item.target)));
-  const weightRows = db.healthLog.filter((item) => item.weightKg).slice(-8);
+
+  const buckets = useMemo(() => {
+    const today = new Date();
+    if (period === "daily") {
+      return Array.from({ length: 7 }, (_, index) => {
+        const date = new Date(today);
+        date.setDate(date.getDate() - (6 - index));
+        const key = localDate(date);
+        const { kcal, target } = dayKcalAndTarget(db, key);
+        return { key, label: `${date.getMonth() + 1}/${date.getDate()}`, kcal, target };
+      });
+    }
+    if (period === "weekly") {
+      // 최근 8주. 각 구간은 7일치 하루 평균 섭취/목표 kcal을 보여준다
+      // (합계를 그대로 쓰면 목표선과 스케일이 안 맞아 비교가 어려워진다).
+      return Array.from({ length: 8 }, (_, index) => {
+        const weeksAgo = 7 - index;
+        const end = new Date(today);
+        end.setDate(end.getDate() - weeksAgo * 7);
+        const start = new Date(end);
+        start.setDate(start.getDate() - 6);
+        let kcalSum = 0;
+        let targetSum = 0;
+        let dayCount = 0;
+        for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+          const { kcal, target } = dayKcalAndTarget(db, localDate(cursor));
+          kcalSum += kcal;
+          targetSum += target;
+          dayCount += 1;
+        }
+        return {
+          key: localDate(start),
+          label: `${start.getMonth() + 1}/${start.getDate()}~`,
+          kcal: dayCount ? kcalSum / dayCount : 0,
+          target: dayCount ? targetSum / dayCount : 0,
+        };
+      });
+    }
+    // 월별: 최근 6개월. 이번 달처럼 아직 다 지나지 않은 달은 "지금까지 지난
+    // 날짜 수"로만 평균을 내서, 하루이틀치 기록만으로 평균이 왜곡되지 않게 한다.
+    return Array.from({ length: 6 }, (_, index) => {
+      const monthsAgo = 5 - index;
+      const base = new Date(today.getFullYear(), today.getMonth() - monthsAgo, 1);
+      const year = base.getFullYear();
+      const month = base.getMonth();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const isCurrentMonth = year === today.getFullYear() && month === today.getMonth();
+      const elapsedDays = isCurrentMonth ? today.getDate() : daysInMonth;
+      let kcalSum = 0;
+      let targetSum = 0;
+      for (let day = 1; day <= elapsedDays; day += 1) {
+        const { kcal, target } = dayKcalAndTarget(db, localDate(new Date(year, month, day)));
+        kcalSum += kcal;
+        targetSum += target;
+      }
+      return {
+        key: `${year}-${String(month + 1).padStart(2, "0")}`,
+        label: `${month + 1}월`,
+        kcal: elapsedDays ? kcalSum / elapsedDays : 0,
+        target: elapsedDays ? targetSum / elapsedDays : 0,
+      };
+    });
+  }, [db, period]);
+
+  const max = Math.max(1, ...buckets.map((item) => Math.max(item.kcal, item.target)));
+  const weightRows = [...db.healthLog]
+    .filter((item) => item.weightKg)
+    .sort((a, b) => a.datetime.localeCompare(b.datetime))
+    .slice(-8);
   const lastWeight = weightRows.at(-1)?.weightKg ?? db.pet.weightKg;
+  const weightValues = weightRows.map((row) => row.weightKg ?? lastWeight);
+  const weightMin = weightValues.length ? Math.min(...weightValues) : 0;
+  const weightMax = weightValues.length ? Math.max(...weightValues) : 0;
+  const weightSpan = weightMax - weightMin || 1;
+  const weightChartWidth = 300;
+  const weightChartHeight = 96;
+  const weightPadY = 12;
+  const weightPoints = weightRows.map((row, index) => {
+    const value = row.weightKg ?? lastWeight;
+    const x = weightRows.length > 1 ? (index / (weightRows.length - 1)) * weightChartWidth : weightChartWidth / 2;
+    const y = weightPadY + (weightChartHeight - weightPadY * 2) * (1 - (value - weightMin) / weightSpan);
+    return { x, y, row };
+  });
+  const weightPolyline = weightPoints.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const todayFeeds = dateRecords(db.feedLog, localDate());
   const protein = todayFeeds.reduce((sum, item) => sum + item.protein, 0);
   const fat = todayFeeds.reduce((sum, item) => sum + item.fat, 0);
+  const periodLabel = period === "daily" ? "최근 7일" : period === "weekly" ? "최근 8주 · 하루 평균" : "최근 6개월 · 하루 평균";
   return (
     <div className="stats-shell">
       <PageHeader title="통계" onBack={back} onHome={home} />
@@ -2969,11 +3102,11 @@ function StatsPage({ db, back, home }: SharedProps) {
         </div>
         <section className="stats-card">
           <div className="stats-card-head">
-            <div><span>최근 7일</span><h2>급여 열량</h2></div>
+            <div><span>{periodLabel}</span><h2>급여 열량</h2></div>
             <span className="metric-chip">목표 스냅샷 기준</span>
           </div>
-          <div className="bar-chart">
-            {days.map((item) => (
+          <div className="bar-chart" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+            {buckets.map((item) => (
               <div className="bar-column" key={item.key}>
                 <div className="bar-track">
                   {item.target > 0 && <span className="target-line" style={{ bottom: `${(item.target / max) * 100}%` }} />}
@@ -2992,12 +3125,22 @@ function StatsPage({ db, back, home }: SharedProps) {
         <section className="stats-card weight-card">
           <div className="stats-card-head"><div><span>최근 기록</span><h2>체중 추이</h2></div><strong>{fmt(lastWeight, 2)} kg</strong></div>
           {weightRows.length > 1 ? (
-            <div className="weight-points">
-              {weightRows.map((row, index) => (
-                <div key={row.id} style={{ "--weight": `${Math.max(12, 72 - ((row.weightKg ?? lastWeight) - 2) * 35)}%` } as React.CSSProperties}>
-                  <span /><small>{row.datetime.slice(5, 10)}</small>{index < weightRows.length - 1 && <i />}
-                </div>
-              ))}
+            <div className="weight-chart">
+              <svg
+                viewBox={`0 0 ${weightChartWidth} ${weightChartHeight}`}
+                preserveAspectRatio="none"
+                className="weight-svg"
+              >
+                <polyline points={weightPolyline} fill="none" stroke="var(--success)" strokeWidth="2" />
+                {weightPoints.map((p) => (
+                  <circle key={p.row.id} cx={p.x} cy={p.y} r="3.5" fill="var(--surface)" stroke="var(--terracotta)" strokeWidth="2" />
+                ))}
+              </svg>
+              <div className="weight-chart-labels">
+                {weightRows.map((row) => (
+                  <span key={row.id}>{row.datetime.slice(5, 10)}</span>
+                ))}
+              </div>
             </div>
           ) : (
             <p className="dark-empty">건강 기록에 체중을 두 번 이상 입력하면 변화가 연결됩니다.</p>
@@ -3071,7 +3214,7 @@ function FeedingPlanPage({
 }: SharedProps & {
   plan?: DailyPlan;
   planIsCurrent: boolean;
-  applyTodayPlan: () => void;
+  applyTodayPlan: (petOverride?: Pet) => void;
 }) {
   const [pet, setPet] = useState(db.pet);
   const batch = db.batches.find((item) => item.id === pet.batchId);
@@ -3094,10 +3237,10 @@ function FeedingPlanPage({
         <section className="form-section">
           <h2>열량과 횟수</h2>
           <div className="field-grid">
-            <label>보호자 목표 kcal<input type="number" value={pet.dailyTargetKcal} onChange={(e) => setPet({ ...pet, dailyTargetKcal: Number(e.target.value) })} /></label>
-            <label>수의사 지정 kcal<input type="number" value={pet.vetTargetKcal ?? ""} onChange={(e) => setPet({ ...pet, vetTargetKcal: e.target.value ? Number(e.target.value) : null })} placeholder="있으면 우선 적용" /></label>
+            <label>보호자 목표 kcal<input type="number" min="0" value={pet.dailyTargetKcal} onChange={(e) => setPet({ ...pet, dailyTargetKcal: nonNegative(Number(e.target.value)) })} /></label>
+            <label>수의사 지정 kcal<input type="number" min="0" value={pet.vetTargetKcal ?? ""} onChange={(e) => setPet({ ...pet, vetTargetKcal: e.target.value ? nonNegative(Number(e.target.value)) : null })} placeholder="있으면 우선 적용" /></label>
           </div>
-          <label>하루 급여 횟수<input type="number" min="1" max="12" value={pet.feedingsPerDay} onChange={(e) => setPet({ ...pet, feedingsPerDay: Number(e.target.value) })} /></label>
+          <label>하루 급여 횟수<input type="number" min="1" max="12" value={pet.feedingsPerDay} onChange={(e) => setPet({ ...pet, feedingsPerDay: Math.max(1, nonNegative(Number(e.target.value))) })} /></label>
           <button className="button secondary" onClick={() => setPet({ ...pet, dailyTargetKcal: merEstimate(pet) })}><Activity size={18} /> 참고 열량 {merEstimate(pet)}kcal 사용</button>
           <p className="form-note">참고값은 입력칸에만 반영됩니다. 아래 설정 저장 후 오늘 계획을 적용해야 사용됩니다.</p>
         </section>
@@ -3113,10 +3256,11 @@ function FeedingPlanPage({
             <div><span>1회분</span><strong>자연식 {fmt(naturalG / pet.feedingsPerDay, 1)}g · 사료 {fmt(dryG / pet.feedingsPerDay, 1)}g</strong></div>
           </div>
           <button className="button primary full" onClick={saveSettings}><Save size={18} /> 설정 저장</button>
-          <button className={`button full ${plan && planIsCurrent ? "success" : "ink"}`} onClick={applyTodayPlan}>
+          <button className={`button full ${plan && planIsCurrent ? "success" : "ink"}`} onClick={() => applyTodayPlan(pet)}>
             {plan && planIsCurrent ? <Check size={18} /> : <CalendarDays size={18} />}
-            {!plan ? "설정한 계획을 오늘에 적용" : planIsCurrent ? "오늘 계획 적용 완료" : "변경된 설정으로 오늘 계획 업데이트"}
+            {!plan ? "저장하고 오늘 계획에 적용" : planIsCurrent ? "오늘 계획 적용 완료" : "저장하고 오늘 계획 업데이트"}
           </button>
+          <p className="form-note">이 버튼은 화면에 입력한 값을 먼저 저장한 뒤 오늘 계획에 적용해요. 위 &quot;설정 저장&quot;만 눌렀다면 아직 오늘 계획에는 반영되지 않아요.</p>
           {plan && <p className="form-note">{today} · 목표 {fmt(plan.targetKcal)}kcal · {plan.feedings}회 스냅샷</p>}
         </section>
       </div>
@@ -3442,22 +3586,22 @@ function FeedSheet({
   // 함께 따라가게 한다. 이미 급여량을 직접 수정한 경우에는 그 값을 그대로 둔다.
   // 저울에서 소수점은 보이지 않으니 항상 정수 그램으로 반올림한다.
   function changeNaturalOffered(value: number) {
-    const rounded = Math.round(value);
+    const rounded = Math.round(nonNegative(value));
     setNaturalOfferedG(rounded);
     if (!naturalEatenTouched) setNaturalEatenG(rounded);
   }
   function changeNaturalEaten(value: number) {
     setNaturalEatenTouched(true);
-    setNaturalEatenG(Math.round(value));
+    setNaturalEatenG(Math.round(nonNegative(value)));
   }
   function changeDryOffered(value: number) {
-    const rounded = Math.round(value);
+    const rounded = Math.round(nonNegative(value));
     setDryOfferedG(rounded);
     if (!dryEatenTouched) setDryEatenG(rounded);
   }
   function changeDryEaten(value: number) {
     setDryEatenTouched(true);
-    setDryEatenG(Math.round(value));
+    setDryEatenG(Math.round(nonNegative(value)));
   }
 
   return (
@@ -3559,13 +3703,13 @@ function FeedEditor({
   const [eatenG, setEatenG] = useState(Math.round(record.eatenG));
   const [eatenTouched, setEatenTouched] = useState(record.offeredG !== record.eatenG);
   function changeOffered(value: number) {
-    const rounded = Math.round(value);
+    const rounded = Math.round(nonNegative(value));
     setOfferedG(rounded);
     if (!eatenTouched) setEatenG(rounded);
   }
   function changeEaten(value: number) {
     setEatenTouched(true);
-    setEatenG(Math.round(value));
+    setEatenG(Math.round(nonNegative(value)));
   }
 
   const [naturalOfferedG, setNaturalOfferedG] = useState(Math.round(record.naturalOfferedG ?? 0));
@@ -3574,13 +3718,13 @@ function FeedEditor({
     (record.naturalOfferedG ?? 0) !== (record.naturalEatenG ?? 0),
   );
   function changeNaturalOffered(value: number) {
-    const rounded = Math.round(value);
+    const rounded = Math.round(nonNegative(value));
     setNaturalOfferedG(rounded);
     if (!naturalEatenTouched) setNaturalEatenG(rounded);
   }
   function changeNaturalEaten(value: number) {
     setNaturalEatenTouched(true);
-    setNaturalEatenG(Math.round(value));
+    setNaturalEatenG(Math.round(nonNegative(value)));
   }
 
   const [dryOfferedG, setDryOfferedG] = useState(Math.round(record.dryOfferedG ?? 0));
@@ -3589,23 +3733,26 @@ function FeedEditor({
     (record.dryOfferedG ?? 0) !== (record.dryEatenG ?? 0),
   );
   function changeDryOffered(value: number) {
-    const rounded = Math.round(value);
+    const rounded = Math.round(nonNegative(value));
     setDryOfferedG(rounded);
     if (!dryEatenTouched) setDryEatenG(rounded);
   }
   function changeDryEaten(value: number) {
     setDryEatenTouched(true);
-    setDryEatenG(Math.round(value));
+    setDryEatenG(Math.round(nonNegative(value)));
   }
 
   function submit() {
+    // 날짜·시간 입력을 비워둔 채 저장하면 안 되므로, 비었을 때는 원래
+    // 기록의 시각으로 되돌린다.
+    const safeDatetime = datetime.trim() || record.datetime;
     // 목표량(계획된 양)과 급여량(실제로 준 양)은 서로 다른 값일 수 있으므로
     // 급여량을 목표량으로 강제로 깎지 않는다.
     if (isMixed) {
       const totalOffered = naturalOfferedG + dryOfferedG;
       const totalEaten = naturalEatenG + dryEatenG;
       onSave({
-        datetime,
+        datetime: safeDatetime,
         note,
         offeredG: totalOffered,
         eatenG: totalEaten,
@@ -3615,7 +3762,7 @@ function FeedEditor({
         dryEatenG,
       });
     } else {
-      onSave({ datetime, note, offeredG, eatenG });
+      onSave({ datetime: safeDatetime, note, offeredG, eatenG });
     }
   }
 

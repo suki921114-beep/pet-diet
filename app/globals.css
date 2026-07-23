@@ -160,7 +160,7 @@ textarea:focus-visible {
 
 .home-date {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 620;
 }
 
@@ -294,11 +294,11 @@ textarea:focus-visible {
 }
 
 .hero-action-card.compact .action-copy p {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .hero-action-card.compact .eyebrow {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .hero-action-card.compact .hero-icon {
@@ -326,13 +326,13 @@ textarea:focus-visible {
 .action-copy p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .eyebrow {
   display: block;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 760;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -444,7 +444,7 @@ textarea:focus-visible {
 
 .wide-progress > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .segments {
@@ -610,7 +610,7 @@ textarea::placeholder {
   max-width: 390px;
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .activity-list,
@@ -651,7 +651,7 @@ textarea::placeholder {
 .activity-row strong,
 .record-row strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -660,7 +660,7 @@ textarea::placeholder {
 .record-row div > span,
 .record-row div > small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .row-actions {
@@ -670,9 +670,9 @@ textarea::placeholder {
 }
 
 .row-actions .icon-button {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
   border-radius: 10px;
   color: var(--muted);
 }
@@ -831,7 +831,7 @@ textarea::placeholder {
 .menu-row small,
 .stack-row small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .pet-profile-card {
@@ -857,9 +857,9 @@ textarea::placeholder {
 }
 
 .pet-edit-button {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
   margin-top: 8px;
   color: var(--muted);
 }
@@ -867,7 +867,7 @@ textarea::placeholder {
 .pet-profile-card p {
   margin: 2px 0 13px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .calorie-hero {
@@ -893,7 +893,7 @@ textarea::placeholder {
 .calorie-hero span,
 .calorie-hero small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .calorie-hero strong {
@@ -921,7 +921,7 @@ textarea::placeholder {
 
 .info-grid span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .info-grid strong {
@@ -978,7 +978,7 @@ label {
 .form-note {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -999,7 +999,7 @@ label {
   border-radius: 14px;
   background: var(--surface);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .ingredient-search {
@@ -1011,7 +1011,7 @@ label {
   border: none;
   background: transparent;
   padding: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink);
 }
 
@@ -1046,7 +1046,7 @@ label {
   border-radius: 10px;
   background: transparent;
   text-align: left;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink);
 }
 
@@ -1057,7 +1057,7 @@ label {
 
 .ingredient-option small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -1084,12 +1084,12 @@ label {
   display: grid;
   gap: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .manual-ingredient-grid input {
   min-height: 38px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .ingredient-list {
@@ -1112,7 +1112,7 @@ label {
 }
 
 .ingredient-name strong {
-  font-size: 13px;
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1120,13 +1120,13 @@ label {
 
 .ingredient-name small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .ingredient-row .icon-button {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
   color: var(--danger);
 }
 
@@ -1186,7 +1186,7 @@ label {
 
 .macro-legend b,
 .macro-legend strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .macro-legend b {
@@ -1224,7 +1224,7 @@ label {
 
 .result-strip span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .result-strip strong {
@@ -1287,7 +1287,7 @@ label {
 .medication-item span,
 .medication-item small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .inventory-grid {
@@ -1313,6 +1313,13 @@ label {
   grid-column: 1 / -1;
   font-size: 23px;
   letter-spacing: -0.04em;
+}
+
+.inventory-summary-detail {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .inventory-row {
@@ -1342,7 +1349,7 @@ label {
 .inventory-row-head span,
 .inventory-meta {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .inventory-bar {
@@ -1387,7 +1394,7 @@ label {
 .health-entry time {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .health-entry time span {
@@ -1415,7 +1422,7 @@ label {
   border-radius: 999px;
   background: var(--surface-soft);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .health-tags .alert {
@@ -1437,12 +1444,12 @@ label {
 }
 
 .record-date strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .record-date span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .record-row {
@@ -1512,7 +1519,7 @@ input[type="range"] {
 
 .plan-preview span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .plan-preview strong {
@@ -1546,7 +1553,7 @@ input[type="range"] {
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 690;
 }
 
@@ -1595,7 +1602,7 @@ input[type="range"] {
   border-radius: 12px;
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 690;
 }
 
@@ -1620,7 +1627,7 @@ input[type="range"] {
 
 .stats-card-head span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .stats-card-head h2 {
@@ -1679,7 +1686,7 @@ input[type="range"] {
 
 .bar-column small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -1699,7 +1706,7 @@ input[type="range"] {
 .stats-metrics span,
 .stats-metrics small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .stats-metrics strong {
@@ -1711,48 +1718,25 @@ input[type="range"] {
   min-height: 190px;
 }
 
-.weight-points {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  height: 110px;
+.weight-chart {
   margin-top: 18px;
-  align-items: end;
 }
 
-.weight-points > div {
-  position: relative;
-  height: 100%;
-}
-
-.weight-points span {
-  position: absolute;
-  top: var(--weight);
-  left: 50%;
-  z-index: 2;
-  width: 8px;
-  height: 8px;
-  border: 2px solid var(--terracotta);
-  border-radius: 50%;
-  background: var(--surface);
-  transform: translate(-50%, -50%);
-}
-
-.weight-points i {
-  position: absolute;
-  top: calc(var(--weight) - 1px);
-  left: 50%;
+.weight-svg {
   width: 100%;
-  height: 2px;
-  background: var(--success);
+  height: 96px;
+  overflow: visible;
 }
 
-.weight-points small {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
+.weight-chart-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.weight-chart-labels span {
   color: var(--muted);
-  font-size: 8px;
-  transform: translateX(-50%);
+  font-size: 12px;
 }
 
 .dark-empty {
@@ -1780,7 +1764,7 @@ input[type="range"] {
   background: #242522;
   box-shadow: 0 12px 34px rgb(0 0 0 / 25%);
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
   animation: toast-in 180ms ease-out both;
 }
@@ -1869,7 +1853,7 @@ input[type="range"] {
 .modal-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
 }
 
@@ -1889,7 +1873,7 @@ input[type="range"] {
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
   line-height: 1;
 }
