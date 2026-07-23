@@ -49,6 +49,7 @@ type Page =
   | "pet-edit"
   | "natural"
   | "dry"
+  | "plan"
   | "meds"
   | "supplements"
   | "inventory"
@@ -1055,8 +1056,8 @@ export default function PetDietApp() {
   function applyTodayPlan() {
     const snapshot = createPlanSnapshot(db, today);
     if (!snapshot) {
-      setToast("설정에서 목표 열량과 급여원을 먼저 저장해주세요.");
-      open("settings");
+      setToast("급여 계획에서 목표 열량과 급여원을 먼저 저장해주세요.");
+      open("plan");
       return;
     }
     if (todayFeeds.length > 0) {
@@ -1394,6 +1395,16 @@ export default function PetDietApp() {
     case "dry":
       content = <DryFoodPage {...shared} />;
       break;
+    case "plan":
+      content = (
+        <FeedingPlanPage
+          {...shared}
+          plan={todayPlan}
+          planIsCurrent={planIsCurrent}
+          applyTodayPlan={applyTodayPlan}
+        />
+      );
+      break;
     case "meds":
       content = <MedicationPage {...shared} type="med" title="처방약 관리" />;
       break;
@@ -1423,9 +1434,6 @@ export default function PetDietApp() {
       content = (
         <SettingsPage
           {...shared}
-          plan={todayPlan}
-          planIsCurrent={planIsCurrent}
-          applyTodayPlan={applyTodayPlan}
           exportData={exportData}
           importRef={importRef}
           importData={importData}
@@ -1517,7 +1525,12 @@ function HomePage({
     (med) => medLogs.filter((row) => row.medicationId === med.id).length < med.perDay,
   );
   const completedMeds = medLogs.length;
-  const latestHealth = [...db.healthLog].sort((a, b) => b.datetime.localeCompare(a.datetime))[0];
+  // datetime은 분 단위(HH:MM)까지만 기록되어 같은 분 안에 여러 메모를 남기면
+  // 값이 동일해질 수 있다. 이럴 때도 항상 "가장 나중에 입력한" 메모가 위에
+  // 오도록 배열 인덱스를 2차 기준으로 사용해 정렬한다.
+  const latestHealth = db.healthLog
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => b.item.datetime.localeCompare(a.item.datetime) || b.index - a.index)[0]?.item;
   const dateLabel = new Intl.DateTimeFormat("ko-KR", {
     month: "long",
     day: "numeric",
@@ -1751,6 +1764,7 @@ function MenuPage({ db, open, back, home }: SharedProps) {
       items: [
         { page: "natural" as Page, title: "자연식", subtitle: `${db.batches.length}개 레시피`, icon: <Beef /> },
         { page: "dry" as Page, title: "시중사료", subtitle: `${db.dryFoods.length}개 제품`, icon: <Bone /> },
+        { page: "plan" as Page, title: "급여 계획", subtitle: "목표 · 배분 설정", icon: <CalendarDays /> },
       ],
     },
     {
@@ -1774,7 +1788,7 @@ function MenuPage({ db, open, back, home }: SharedProps) {
         { page: "inventory" as Page, title: "재고관리", subtitle: "자연식 · 사료 · 약", icon: <PackageCheck /> },
         { page: "health" as Page, title: "건강기록", subtitle: `${db.healthLog.length}건 기록`, icon: <HeartPulse /> },
         { page: "stats" as Page, title: "통계", subtitle: "일별 · 주별 · 월별", icon: <BarChart3 /> },
-        { page: "settings" as Page, title: "설정", subtitle: "급여 계획 · 백업", icon: <Settings /> },
+        { page: "settings" as Page, title: "설정", subtitle: "백업 · 가족계정", icon: <Settings /> },
       ],
     },
   ];
@@ -2444,7 +2458,10 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
     updateDb((current) => ({ ...current, healthLog: [...current.healthLog, record] }), "건강 기록을 저장했어요.");
     setFormOpen(false);
   }
-  const rows = [...db.healthLog].sort((a, b) => b.datetime.localeCompare(a.datetime));
+  const rows = db.healthLog
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => b.item.datetime.localeCompare(a.item.datetime) || b.index - a.index)
+    .map(({ item }) => item);
   return (
     <>
       <PageHeader
@@ -2635,7 +2652,7 @@ function RecordsPage({
   );
 }
 
-function SettingsPage({
+function FeedingPlanPage({
   db,
   updateDb,
   back,
@@ -2644,32 +2661,10 @@ function SettingsPage({
   plan,
   planIsCurrent,
   applyTodayPlan,
-  exportData,
-  importRef,
-  importData,
-  authState,
-  household,
-  familyBusy,
-  createHousehold,
-  joinHousehold,
-  leaveHousehold,
-  refreshHousehold,
-  logout,
 }: SharedProps & {
   plan?: DailyPlan;
   planIsCurrent: boolean;
   applyTodayPlan: () => void;
-  exportData: () => void;
-  importRef: React.RefObject<HTMLInputElement | null>;
-  importData: (file: File) => void;
-  authState: AuthState;
-  household: HouseholdInfo | null;
-  familyBusy: boolean;
-  createHousehold: (name: string) => void;
-  joinHousehold: (inviteCode: string) => void;
-  leaveHousehold: () => void;
-  refreshHousehold: () => void;
-  logout: () => void;
 }) {
   const [pet, setPet] = useState(db.pet);
   const batch = db.batches.find((item) => item.id === pet.batchId);
@@ -2686,7 +2681,7 @@ function SettingsPage({
   }
   return (
     <>
-      <PageHeader title="설정" onBack={back} onHome={home} />
+      <PageHeader title="급여 계획" onBack={back} onHome={home} />
       <div className="page-content form-page">
         <SectionTitle title="하루 목표와 급여원을 정하세요" description="저장한 설정은 오늘 계획 적용 버튼을 눌렀을 때 날짜별 스냅샷으로 고정됩니다." />
         <section className="form-section">
@@ -2717,6 +2712,44 @@ function SettingsPage({
           </button>
           {plan && <p className="form-note">{today} · 목표 {fmt(plan.targetKcal)}kcal · {plan.feedings}회 스냅샷</p>}
         </section>
+      </div>
+    </>
+  );
+}
+
+function SettingsPage({
+  updateDb,
+  back,
+  home,
+  exportData,
+  importRef,
+  importData,
+  authState,
+  household,
+  familyBusy,
+  createHousehold,
+  joinHousehold,
+  leaveHousehold,
+  refreshHousehold,
+  logout,
+}: SharedProps & {
+  exportData: () => void;
+  importRef: React.RefObject<HTMLInputElement | null>;
+  importData: (file: File) => void;
+  authState: AuthState;
+  household: HouseholdInfo | null;
+  familyBusy: boolean;
+  createHousehold: (name: string) => void;
+  joinHousehold: (inviteCode: string) => void;
+  leaveHousehold: () => void;
+  refreshHousehold: () => void;
+  logout: () => void;
+}) {
+  return (
+    <>
+      <PageHeader title="설정" onBack={back} onHome={home} />
+      <div className="page-content form-page">
+        <SectionTitle title="백업과 가족 계정을 관리하세요" description="급여 목표와 배분 설정은 메뉴의 '급여 계획'에서 관리합니다." />
         <section className="form-section">
           <h2>데이터 백업</h2>
           <p className="form-note">기록은 이 브라우저에 저장됩니다. 기기를 바꾸기 전 JSON 백업을 내려받으세요.</p>
