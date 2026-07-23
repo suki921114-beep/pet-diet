@@ -11,6 +11,7 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
+  Cookie,
   Copy,
   Download,
   Edit3,
@@ -49,6 +50,7 @@ type Page =
   | "pet-edit"
   | "natural"
   | "dry"
+  | "snacks"
   | "plan"
   | "meds"
   | "supplements"
@@ -116,6 +118,17 @@ type DryFood = {
   moisture: number;
 };
 
+type Snack = {
+  id: string;
+  name: string;
+  totalWeight: number;
+  usedWeight: number;
+  kcalPer100: number;
+  protein: number;
+  fat: number;
+  carb: number;
+};
+
 type Medication = {
   id: string;
   type: "med" | "supplement";
@@ -133,15 +146,17 @@ type FeedRecord = {
   id: string;
   datetime: string;
   label: string;
-  source: "plan" | "batch" | "dry" | "custom";
+  source: "plan" | "batch" | "dry" | "custom" | "snack";
   offeredG: number;
   eatenG: number;
   calculatedKcal: number;
   protein: number;
   fat: number;
+  carb?: number;
   note: string;
   batchId?: string;
   dryFoodId?: string;
+  snackId?: string;
   naturalOfferedG?: number;
   naturalEatenG?: number;
   dryOfferedG?: number;
@@ -190,6 +205,7 @@ type Database = {
   pet: Pet;
   batches: Batch[];
   dryFoods: DryFood[];
+  snacks: Snack[];
   medications: Medication[];
   feedLog: FeedRecord[];
   medLog: MedicationLog[];
@@ -235,6 +251,9 @@ const INGREDIENTS: IngredientLine[] = [
   { name: "대구·흰살생선", grams: 0, kcalPer100: 82, protein: 18.4, fat: 0.7, carb: 0 },
   { name: "연어(구운것)", grams: 0, kcalPer100: 206, protein: 22, fat: 13, carb: 0 },
   { name: "새우(삶은, 껍질제거)", grams: 0, kcalPer100: 99, protein: 24, fat: 0.3, carb: 0.2 },
+  { name: "두부", grams: 0, kcalPer100: 50, protein: 5.6, fat: 3.4, carb: 0.8 },
+  { name: "순두부", grams: 0, kcalPer100: 40, protein: 4, fat: 2.7, carb: 0.9 },
+  { name: "연두부", grams: 0, kcalPer100: 45, protein: 5.7, fat: 2.6, carb: 0.9 },
   { name: "달걀(삶은)", grams: 0, kcalPer100: 155, protein: 13, fat: 11, carb: 1.1 },
   { name: "단호박", grams: 0, kcalPer100: 26, protein: 1, fat: 0.1, carb: 6.5 },
   { name: "고구마", grams: 0, kcalPer100: 86, protein: 1.6, fat: 0.1, carb: 20.1 },
@@ -312,6 +331,7 @@ function emptyDatabase(): Database {
     },
     batches: [],
     dryFoods: [],
+    snacks: [],
     medications: [],
     feedLog: [],
     medLog: [],
@@ -391,6 +411,19 @@ function normalizeDatabase(raw: unknown): Database {
       }))
     : base.dryFoods;
 
+  const snacks: Snack[] = Array.isArray(source.snacks)
+    ? (source.snacks as Record<string, unknown>[]).map((s) => ({
+        id: String(s.id ?? uid("snack")),
+        name: String(s.name ?? "간식"),
+        totalWeight: toNumber(s.totalWeight),
+        usedWeight: toNumber(s.usedWeight),
+        kcalPer100: toNumber(s.kcalPer100),
+        protein: toNumber(s.protein),
+        fat: toNumber(s.fat),
+        carb: toNumber(s.carb),
+      }))
+    : base.snacks;
+
   const legacyMeds = (source.medications ?? source.meds) as Record<string, unknown>[] | undefined;
   const medications: Medication[] = Array.isArray(legacyMeds)
     ? legacyMeds.map((m) => ({
@@ -427,9 +460,11 @@ function normalizeDatabase(raw: unknown): Database {
       calculatedKcal: toNumber(f.calculatedKcal ?? f.kcal),
       protein: toNumber(f.protein),
       fat: toNumber(f.fat),
+      carb: f.carb !== undefined ? toNumber(f.carb) : undefined,
       note: String(f.note ?? ""),
       batchId: f.batchId ? String(f.batchId) : undefined,
       dryFoodId: f.dryFoodId ? String(f.dryFoodId) : undefined,
+      snackId: f.snackId ? String(f.snackId) : undefined,
       naturalOfferedG: toNumber(f.naturalOfferedG ?? f.natGrams),
       naturalEatenG: toNumber(f.naturalEatenG ?? f.natGrams),
       dryOfferedG: toNumber(f.dryOfferedG ?? f.dryGrams),
@@ -460,6 +495,7 @@ function normalizeDatabase(raw: unknown): Database {
     pet,
     batches,
     dryFoods,
+    snacks,
     medications,
     feedLog,
     medLog: Array.isArray(source.medLog)
@@ -740,6 +776,7 @@ export default function PetDietApp() {
   const [history, setHistory] = useState<Page[]>([]);
   const [toast, setToast] = useState("");
   const [feedSheetOpen, setFeedSheetOpen] = useState(false);
+  const [snackSheetOpen, setSnackSheetOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<FeedRecord | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const today = localDate();
@@ -991,9 +1028,22 @@ export default function PetDietApp() {
     );
     const naturalRemainingG = Math.max(0, todayPlan.totalNaturalGrams - naturalFedG);
     const dryRemainingG = Math.max(0, todayPlan.totalDryGrams - dryFedG);
+    // 간식은 계획된 급여원이 아니라 별도로 먹인 열량이라, 오늘 먹인 간식
+    // 열량만큼 "남은 목표 열량"에서 미리 빼고, 그 줄어든 열량을 원래 자연식:
+    // 사료 비율 그대로 다시 나눈다. 그래야 간식을 먹인 만큼 다음 급여가
+    // 자연스럽게 줄어들면서도, 자연식과 사료 사이의 원래 배합 비율(레시피
+    // 영양 균형)은 그대로 유지된다.
+    const snackKcalToday = todayFeeds
+      .filter((item) => item.source === "snack")
+      .reduce((sum, item) => sum + item.calculatedKcal, 0);
+    const naturalRemainingKcal = (naturalRemainingG * todayPlan.naturalKcalPer100) / 100;
+    const dryRemainingKcal = (dryRemainingG * todayPlan.dryKcalPer100) / 100;
+    const remainingKcalTotal = naturalRemainingKcal + dryRemainingKcal;
+    const adjustedKcalTotal = Math.max(0, remainingKcalTotal - snackKcalToday);
+    const shrinkRatio = remainingKcalTotal > 0 ? adjustedKcalTotal / remainingKcalTotal : 0;
     // 저울은 소수점을 표시하지 않으므로 1회분 급여량도 정수 그램으로 반올림한다.
-    const naturalG = Math.round(naturalRemainingG / remainingMeals);
-    const dryG = Math.round(dryRemainingG / remainingMeals);
+    const naturalG = Math.round((naturalRemainingG * shrinkRatio) / remainingMeals);
+    const dryG = Math.round((dryRemainingG * shrinkRatio) / remainingMeals);
     const kcal =
       (naturalG * todayPlan.naturalKcalPer100) / 100 + (dryG * todayPlan.dryKcalPer100) / 100;
     return { remainingMeals, kcal, naturalG, dryG };
@@ -1120,6 +1170,7 @@ export default function PetDietApp() {
       record.dryOfferedG ?? (record.source === "dry" ? record.offeredG : 0),
       record.dryEatenG ?? (record.source === "dry" ? record.eatenG : 0),
     );
+    const snackAmount = record.source === "snack" ? Math.max(record.offeredG, record.eatenG) : 0;
     return {
       ...current,
       batches: current.batches.map((item) =>
@@ -1130,6 +1181,11 @@ export default function PetDietApp() {
       dryFoods: current.dryFoods.map((item) =>
         item.id === record.dryFoodId
           ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * dryAmount) }
+          : item,
+      ),
+      snacks: current.snacks.map((item) =>
+        item.id === record.snackId
+          ? { ...item, usedWeight: Math.max(0, item.usedWeight + direction * snackAmount) }
           : item,
       ),
     };
@@ -1283,6 +1339,52 @@ export default function PetDietApp() {
     updateDb((current) => ({ ...current, healthLog: [...current.healthLog, row] }), "건강 메모를 남겼어요.");
   }
 
+  function recordSnack(snackId: string, grams: number) {
+    const snack = db.snacks.find((item) => item.id === snackId);
+    if (!snack || !(grams > 0)) return;
+    if (grams > remaining(snack.totalWeight, snack.usedWeight) + 0.001) {
+      setToast(`${snack.name} 재고가 부족해요.`);
+      return;
+    }
+    const kcal = (grams * snack.kcalPer100) / 100;
+    const record: FeedRecord = {
+      id: uid("feed"),
+      datetime: `${today}T${localTime()}`,
+      label: snack.name,
+      source: "snack",
+      offeredG: grams,
+      eatenG: grams,
+      calculatedKcal: kcal,
+      protein: (grams * snack.protein) / 100,
+      fat: (grams * snack.fat) / 100,
+      carb: (grams * snack.carb) / 100,
+      note: "",
+      snackId: snack.id,
+    };
+    // 간식 열량이 하루 목표 열량의 10%를 넘으면(수의사들이 흔히 권장하는
+    // 기준) 가볍게 경고해서, 자연식·사료 배합의 영양 균형이 조용히 무너지지
+    // 않도록 한다.
+    const target = todayPlan?.targetKcal ?? effectiveTarget(db.pet);
+    const snackKcalSoFar = todayFeeds
+      .filter((item) => item.source === "snack")
+      .reduce((sum, item) => sum + item.calculatedKcal, 0);
+    const snackKcalAfter = snackKcalSoFar + kcal;
+    const overTenPercent = target > 0 && snackKcalAfter > target * 0.1;
+    updateDb(
+      (current) => ({
+        ...current,
+        feedLog: [...current.feedLog, record],
+        snacks: current.snacks.map((item) =>
+          item.id === snack.id ? { ...item, usedWeight: item.usedWeight + grams } : item,
+        ),
+      }),
+      overTenPercent
+        ? `간식을 기록했어요. 오늘 간식이 목표 열량의 ${Math.round((snackKcalAfter / target) * 100)}%예요 (권장 10% 이내).`
+        : "간식을 기록했어요.",
+    );
+    setSnackSheetOpen(false);
+  }
+
   function exportData() {
     const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1329,6 +1431,7 @@ export default function PetDietApp() {
           applyTodayPlan={applyTodayPlan}
           recordPlannedMeal={() => recordPlannedMeal()}
           openFeedSheet={() => setFeedSheetOpen(true)}
+          openSnackSheet={() => setSnackSheetOpen(true)}
           takeMedication={takeMedication}
           quickHealthNote={quickHealthNote}
           deleteFeed={deleteFeed}
@@ -1350,6 +1453,9 @@ export default function PetDietApp() {
       break;
     case "dry":
       content = <DryFoodPage {...shared} />;
+      break;
+    case "snacks":
+      content = <SnackPage {...shared} />;
       break;
     case "plan":
       content = (
@@ -1426,6 +1532,9 @@ export default function PetDietApp() {
           onSave={(values) => saveEditedFeed(editingRecord, values)}
         />
       )}
+      {snackSheetOpen && (
+        <SnackSheet snacks={db.snacks} onClose={() => setSnackSheetOpen(false)} onSave={recordSnack} openSnackPage={() => { setSnackSheetOpen(false); open("snacks"); }} />
+      )}
     </main>
   );
 }
@@ -1453,6 +1562,7 @@ function HomePage({
   applyTodayPlan,
   recordPlannedMeal,
   openFeedSheet,
+  openSnackSheet,
   takeMedication,
   quickHealthNote,
   deleteFeed,
@@ -1467,6 +1577,7 @@ function HomePage({
   applyTodayPlan: () => void;
   recordPlannedMeal: () => void;
   openFeedSheet: () => void;
+  openSnackSheet: () => void;
   takeMedication: (medication: Medication) => void;
   quickHealthNote: (note: string) => void;
   deleteFeed: (record: FeedRecord) => void;
@@ -1577,6 +1688,10 @@ function HomePage({
                   오늘 기록 보기
                 </button>
               )}
+              <button className="button secondary" onClick={openSnackSheet}>
+                <Cookie size={16} />
+                간식 급여
+              </button>
             </div>
           </div>
           <button
@@ -1767,6 +1882,7 @@ function MenuPage({ db, open, back, home }: SharedProps) {
       items: [
         { page: "natural" as Page, title: "자연식", subtitle: `${db.batches.length}개 레시피`, icon: <Beef /> },
         { page: "dry" as Page, title: "시중사료", subtitle: `${db.dryFoods.length}개 제품`, icon: <Bone /> },
+        { page: "snacks" as Page, title: "간식", subtitle: `${db.snacks.length}개 등록`, icon: <Cookie /> },
         { page: "plan" as Page, title: "급여 계획", subtitle: "목표 · 배분 설정", icon: <CalendarDays /> },
       ],
     },
@@ -2357,6 +2473,67 @@ function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
   );
 }
 
+function SnackPage({ db, updateDb, back, home, setToast }: SharedProps) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") ?? "").trim();
+    if (!name) return;
+    const item: Snack = {
+      id: uid("snack"),
+      name,
+      totalWeight: toNumber(form.get("totalWeight")),
+      usedWeight: 0,
+      kcalPer100: toNumber(form.get("kcalPer100")),
+      protein: toNumber(form.get("protein")),
+      fat: toNumber(form.get("fat")),
+      carb: toNumber(form.get("carb")),
+    };
+    if (!(item.kcalPer100 > 0) || !(item.totalWeight > 0)) {
+      setToast("제품 중량과 열량을 입력해주세요.");
+      return;
+    }
+    updateDb((current) => ({ ...current, snacks: [...current.snacks, item] }), "간식을 등록했어요.");
+    event.currentTarget.reset();
+  }
+  return (
+    <>
+      <PageHeader title="간식 관리" onBack={back} onHome={home} />
+      <form className="page-content form-page" onSubmit={submit}>
+        <SectionTitle title="간식을 검색해주세요" />
+        <section className="form-section">
+          <label>제품명<input name="name" placeholder="예: 오리 육포" required /></label>
+          <div className="field-grid">
+            <label>구매 중량(g)<input name="totalWeight" type="number" min="1" required /></label>
+            <label>열량(kcal/100g)<input name="kcalPer100" type="number" step="0.1" required /></label>
+          </div>
+          <div className="field-grid compact">
+            <label>단백질 %<input name="protein" type="number" step="0.1" /></label>
+            <label>지방 %<input name="fat" type="number" step="0.1" /></label>
+            <label>탄수화물 %<input name="carb" type="number" step="0.1" /></label>
+          </div>
+          <p className="form-note warning">
+            간식은 하루 목표 열량의 10% 이내로 급여하는 걸 권장해요. 너무 자주 주면 자연식·사료의 영양 균형이 흐트러질 수 있어요.
+          </p>
+        </section>
+        <button className="button primary full" type="submit"><Plus size={18} /> 간식 추가</button>
+      </form>
+      <section className="page-content previous-section">
+        <SectionTitle title="등록된 간식" />
+        <div className="stack-list">
+          {db.snacks.map((snack) => (
+            <div className="stack-row static" key={snack.id}>
+              <Cookie size={19} />
+              <span><strong>{snack.name}</strong><small>{fmt(snack.kcalPer100)}kcal/100g · 재고 {fmt(remaining(snack.totalWeight, snack.usedWeight))}g</small></span>
+              <button className="danger-link" onClick={() => updateDb((current) => ({ ...current, snacks: current.snacks.filter((item) => item.id !== snack.id) }), "간식을 삭제했어요.")}>삭제</button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
 function MedicationPage({
   db,
   updateDb,
@@ -2516,6 +2693,8 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
   const naturalUsed = db.batches.reduce((sum, item) => sum + item.usedWeight, 0);
   const dryTotal = db.dryFoods.reduce((sum, item) => sum + item.totalWeight, 0);
   const dryUsed = db.dryFoods.reduce((sum, item) => sum + item.usedWeight, 0);
+  const snackTotal = db.snacks.reduce((sum, item) => sum + item.totalWeight, 0);
+  const snackUsed = db.snacks.reduce((sum, item) => sum + item.usedWeight, 0);
   const medStock = db.medications.filter((item) => item.type === "med").reduce((sum, item) => sum + item.stock, 0);
   const suppStock = db.medications.filter((item) => item.type === "supplement").reduce((sum, item) => sum + item.stock, 0);
   return (
@@ -2527,6 +2706,7 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
           {[
             ["자연식", percent(naturalUsed, naturalTotal), <Beef key="n" />],
             ["시중사료", percent(dryUsed, dryTotal), <Bone key="d" />],
+            ["간식", percent(snackUsed, snackTotal), <Cookie key="sn" />],
             ["처방약", medStock > 0 ? 100 : 0, <Pill key="m" />],
             ["영양제", suppStock > 0 ? 100 : 0, <Sparkles key="s" />],
           ].map(([label, value, icon]) => (
@@ -2574,6 +2754,18 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
             return (
               <div className="inventory-row" key={food.id}>
                 <div className="inventory-row-head"><div><strong>{food.name}</strong><span>남은 {fmt(remaining(food.totalWeight, food.usedWeight))}g</span></div><b>{value}%</b></div>
+                <div className="inventory-bar"><span style={{ width: `${value}%` }} /></div>
+              </div>
+            );
+          })}
+        </div>
+        <SectionTitle title="간식 재고" />
+        <div className="inventory-list">
+          {db.snacks.map((snack) => {
+            const value = percent(snack.usedWeight, snack.totalWeight);
+            return (
+              <div className="inventory-row" key={snack.id}>
+                <div className="inventory-row-head"><div><strong>{snack.name}</strong><span>남은 {fmt(remaining(snack.totalWeight, snack.usedWeight))}g</span></div><b>{value}%</b></div>
                 <div className="inventory-bar"><span style={{ width: `${value}%` }} /></div>
               </div>
             );
@@ -2844,7 +3036,7 @@ function RecordsPage({
               <div className="record-date"><strong>{date}</strong><span>{fmt(feeds.reduce((sum, item) => sum + item.calculatedKcal, 0))} kcal</span></div>
               {feeds.map((record) => (
                 <div className="record-row" key={record.id}>
-                  <div className="record-symbol"><UtensilsCrossed size={18} /></div>
+                  <div className="record-symbol">{record.source === "snack" ? <Cookie size={18} /> : <UtensilsCrossed size={18} />}</div>
                   <div><strong>{record.datetime.slice(11, 16)} · {record.label}</strong><span>목표 {fmt(record.offeredG)}g · 급여 {fmt(record.eatenG)}g · {fmt(record.calculatedKcal)}kcal</span>{feedBreakdownText(record) && <span className="breakdown">{feedBreakdownText(record)}</span>}{record.note && <small>{record.note}</small>}</div>
                   <div className="row-actions"><IconButton label="수정" onClick={() => editFeed(record)}><Edit3 size={16} /></IconButton><IconButton label="삭제" onClick={() => deleteFeed(record)}><Trash2 size={16} /></IconButton></div>
                 </div>
@@ -3277,6 +3469,63 @@ function FeedSheet({
         {plan.dryFoodId && <div className="sheet-source"><strong>시중사료</strong><div className="field-grid"><label>목표량(g)<input type="number" step="1" value={dryOfferedG} onChange={(e) => changeDryOffered(Number(e.target.value))} /></label><label>급여량(g)<input type="number" step="1" value={dryEatenG} onChange={(e) => changeDryEaten(Number(e.target.value))} /></label></div></div>}
         <label>메모<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="남긴 이유, 식욕 등" /></label>
         <button className="button primary full" onClick={() => onSave({ naturalOfferedG, naturalEatenG, dryOfferedG, dryEatenG, note, time: localTime() })}>급여 기록 저장</button>
+      </div>
+    </div>
+  );
+}
+
+function SnackSheet({
+  snacks,
+  onClose,
+  onSave,
+  openSnackPage,
+}: {
+  snacks: Snack[];
+  onClose: () => void;
+  onSave: (snackId: string, grams: number) => void;
+  openSnackPage: () => void;
+}) {
+  const [snackId, setSnackId] = useState(snacks[0]?.id ?? "");
+  const [grams, setGrams] = useState("");
+  const snack = snacks.find((item) => item.id === snackId) ?? null;
+  const kcal = snack ? (Number(grams || 0) * snack.kcalPer100) / 100 : 0;
+
+  return (
+    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-label="간식 급여">
+      <div className="bottom-sheet">
+        <div className="sheet-handle" />
+        <div className="sheet-head"><div><span className="eyebrow">간식</span><h2>간식 급여 기록</h2></div><IconButton label="닫기" onClick={onClose}><X size={20} /></IconButton></div>
+        {snacks.length === 0 ? (
+          <EmptyState
+            icon={<Cookie size={26} />}
+            title="등록된 간식이 없어요"
+            description="먼저 간식을 등록해주세요."
+            action={<button className="button primary" onClick={openSnackPage}>간식 등록하러 가기</button>}
+          />
+        ) : (
+          <>
+            <label>
+              간식 선택
+              <select value={snackId} onChange={(e) => setSnackId(e.target.value)}>
+                {snacks.map((item) => (
+                  <option value={item.id} key={item.id}>{item.name} ({fmt(item.kcalPer100)}kcal/100g)</option>
+                ))}
+              </select>
+            </label>
+            <label>급여량(g)<input type="number" min="0" step="1" value={grams} onChange={(e) => setGrams(e.target.value)} placeholder="0" /></label>
+            <div className="result-strip">
+              <span>예상 열량</span>
+              <strong>{fmt(kcal)} kcal</strong>
+            </div>
+            <button
+              className="button primary full"
+              disabled={!snack || !(Number(grams) > 0)}
+              onClick={() => snack && onSave(snack.id, Number(grams))}
+            >
+              간식 급여 기록
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

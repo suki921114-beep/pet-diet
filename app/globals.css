@@ -1570,17 +1570,8 @@ input[type="range"] {
 
 .stats-shell {
   min-height: 100svh;
-  background: var(--surface);
+  background: var(--canvas);
   color: var(--ink);
-}
-
-.stats-shell .page-header {
-  background: rgb(251 251 250 / 91%);
-  border-color: var(--line);
-}
-
-.stats-shell .icon-button:hover {
-  background: var(--surface-soft);
 }
 
 .stats-content {
