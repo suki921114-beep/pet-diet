@@ -285,90 +285,9 @@ function fmt(value: number | null | undefined, digits = 0) {
   });
 }
 
-function defaultDatabase(): Database {
-  const batchId = "batch-sample";
-  const dryFoodId = "dry-sample";
-  return {
-    schemaVersion: 3,
-    pet: {
-      name: "봄이",
-      birthdate: "2014-12-15",
-      sex: "female-neutered",
-      registrationNo: "",
-      weightKg: 2.53,
-      targetWeightKg: null,
-      activity: "low",
-      condition: "chronic",
-      weightGoal: "maintain",
-      dailyTargetKcal: 140,
-      vetTargetKcal: null,
-      feedingsPerDay: 5,
-      fatLimitG: null,
-      naturalRatio: 80,
-      batchId,
-      dryFoodId,
-      photoDataUrl: null,
-    },
-    batches: [
-      {
-        id: batchId,
-        name: "닭가슴살 단호박 테린",
-        dateMade: "2026-07-24",
-        expiry: "2026-07-28",
-        totalWeight: 600,
-        usedWeight: 20,
-        kcalPer100: 126.8,
-        proteinPer100: 21.4,
-        fatPer100: 2.5,
-        carbPer100: 5.9,
-        recipe: [
-          { ...findIngredient("닭가슴살(삶은)"), grams: 400 },
-          { ...findIngredient("단호박"), grams: 100 },
-          { ...findIngredient("양배추"), grams: 50 },
-          { ...findIngredient("브로콜리"), grams: 50 },
-        ],
-      },
-    ],
-    dryFoods: [
-      {
-        id: dryFoodId,
-        name: "저지방 처방 건식사료",
-        totalWeight: 1000,
-        usedWeight: 120,
-        kcalPer100: 330,
-        protein: 22,
-        fat: 7,
-        fiber: 6,
-        ash: 7,
-        calcium: 0.8,
-        phosphorus: 0.6,
-        moisture: 9,
-      },
-    ],
-    medications: [
-      {
-        id: "supp-lypex",
-        type: "supplement",
-        name: "라이펙스",
-        prescribedDate: "2026-07-01",
-        dose: "하루 1캡슐 중 1/5회분",
-        perDay: 5,
-        stock: 24,
-        stockUnit: "캡슐",
-        stockPerDose: 0.2,
-        memo: "캡슐을 열어 장용 코팅 과립을 음식에 뿌려 급여",
-      },
-    ],
-    feedLog: [],
-    medLog: [],
-    healthLog: [],
-    dailyPlans: {},
-  };
-}
-
-// 설정 화면의 "전체 초기화"는 defaultDatabase()의 예시(사실상 실제 시드) 데이터로
-// 되돌아가지 않고, 반려동물 프로필까지 포함해 정말로 아무것도 없는 빈 상태로
-// 만들어야 한다. 그래서 별도의 빈 데이터 생성 함수를 둔다.
+// 로그인 전/데이터가 없는 상태, 그리고 설정 화면의 "전체 초기화"는 예시(샘플)
+// 데이터가 아니라 반려동물 프로필까지 포함해 정말로 아무것도 없는 빈 상태여야
+// 한다. 그래서 빈 데이터를 만드는 함수를 하나만 둔다.
 function emptyDatabase(): Database {
   return {
     schemaVersion: 3,
@@ -407,7 +326,9 @@ function toNumber(value: unknown, fallback = 0) {
 }
 
 function normalizeDatabase(raw: unknown): Database {
-  const base = defaultDatabase();
+  // 예시(사실상 실제 시드) 데이터가 아니라 빈 상태를 기준으로 정규화한다.
+  // 그래야 로그인 전이나 데이터가 없는 상태에서 "봄이" 샘플이 섞여 들어가지 않는다.
+  const base = emptyDatabase();
   if (!raw || typeof raw !== "object") return base;
   const source = raw as Record<string, unknown>;
   const legacyDog = (source.dog ?? source.pet ?? {}) as Record<string, unknown>;
@@ -813,7 +734,7 @@ function Toast({ message }: { message: string }) {
 }
 
 export default function PetDietApp() {
-  const [db, setDb] = useState<Database>(() => defaultDatabase());
+  const [db, setDb] = useState<Database>(() => emptyDatabase());
   const [hydrated, setHydrated] = useState(false);
   const [page, setPage] = useState<Page>("home");
   const [history, setHistory] = useState<Page[]>([]);
@@ -841,7 +762,7 @@ export default function PetDietApp() {
           setDb(normalizeDatabase(JSON.parse(current ?? legacy ?? "{}")));
         }
       } catch {
-        setDb(defaultDatabase());
+        setDb(emptyDatabase());
       } finally {
         setHydrated(true);
       }
@@ -1587,7 +1508,7 @@ function HomePage({
       <div className="home-topbar">
         <div>
           <span className="home-date">{dateLabel}</span>
-          <h1>{db.pet.name}, 밥먹자!</h1>
+          <h1>{db.pet.name ? `${db.pet.name}, 밥먹자!` : "댕댕아, 밥먹자!"}</h1>
         </div>
         <IconButton label="설정 메뉴" onClick={() => open("menu")} className="gear-button">
           <Settings size={23} />
@@ -2319,31 +2240,51 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
 }
 
 function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
+  // 보증 성분(조단백·조지방·조섬유·조회분·수분)을 입력하면 Modified Atwater
+  // 방식으로 대사에너지를 자동 계산해 kcal 입력칸에 바로 반영한다. 사용자가
+  // kcal 칸을 직접 수정하면 그 이후로는 자동 계산을 멈추고 입력값을 존중한다.
+  const [protein, setProtein] = useState("");
+  const [fat, setFat] = useState("");
+  const [fiber, setFiber] = useState("");
+  const [ash, setAsh] = useState("");
+  const [moisture, setMoisture] = useState("");
+  const [kcalManual, setKcalManual] = useState<string | null>(null);
+
+  const nfe = Math.max(
+    0,
+    100 - toNumber(protein) - toNumber(fat) - toNumber(fiber) - toNumber(ash) - toNumber(moisture),
+  );
+  const estimatedKcal = toNumber(protein) * 3.5 + toNumber(fat) * 8.5 + nfe * 3.5;
+  const kcalIsAuto = kcalManual === null;
+  const kcalValue = kcalIsAuto ? (estimatedKcal > 0 ? String(Math.round(estimatedKcal * 10) / 10) : "") : kcalManual;
+
+  function resetForm() {
+    setProtein("");
+    setFat("");
+    setFiber("");
+    setAsh("");
+    setMoisture("");
+    setKcalManual(null);
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") ?? "").trim();
     if (!name) return;
-    const protein = toNumber(form.get("protein"));
-    const fat = toNumber(form.get("fat"));
-    const fiber = toNumber(form.get("fiber"));
-    const moisture = toNumber(form.get("moisture"));
-    const ash = toNumber(form.get("ash"));
-    const nfe = Math.max(0, 100 - protein - fat - fiber - moisture - ash);
-    const estimated = protein * 3.5 + fat * 8.5 + nfe * 3.5;
     const item: DryFood = {
       id: uid("dry"),
       name,
       totalWeight: toNumber(form.get("totalWeight")),
       usedWeight: 0,
-      kcalPer100: toNumber(form.get("kcalPer100"), estimated),
-      protein,
-      fat,
-      fiber,
-      ash,
+      kcalPer100: toNumber(form.get("kcalPer100"), estimatedKcal),
+      protein: toNumber(protein),
+      fat: toNumber(fat),
+      fiber: toNumber(fiber),
+      ash: toNumber(ash),
       calcium: toNumber(form.get("calcium")),
       phosphorus: toNumber(form.get("phosphorus")),
-      moisture,
+      moisture: toNumber(moisture),
     };
     if (!(item.kcalPer100 > 0) || !(item.totalWeight > 0)) {
       setToast("제품 중량과 열량 또는 성분표를 입력해주세요.");
@@ -2358,6 +2299,7 @@ function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
       "시중사료를 등록했어요.",
     );
     event.currentTarget.reset();
+    resetForm();
   }
   return (
     <>
@@ -2368,23 +2310,32 @@ function DryFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
           <label>제품명<input name="name" placeholder="예: 저지방 처방 건식사료" required /></label>
           <div className="field-grid">
             <label>구매 중량(g)<input name="totalWeight" type="number" min="1" required /></label>
-            <label>대사에너지(kcal/100g)<input name="kcalPer100" type="number" step="0.1" /></label>
+            <label>
+              대사에너지(kcal/100g)
+              <input
+                name="kcalPer100"
+                type="number"
+                step="0.1"
+                value={kcalValue}
+                onChange={(e) => setKcalManual(e.target.value)}
+                placeholder="성분 입력 시 자동 계산"
+              />
+            </label>
           </div>
+          {kcalIsAuto && estimatedKcal > 0 && (
+            <p className="form-note">보증 성분 기준 자동 계산된 값이에요. 직접 입력하면 그 값을 우선 사용해요.</p>
+          )}
         </section>
         <section className="form-section">
           <h2>보증 성분</h2>
           <div className="field-grid compact">
-            {[
-              ["protein", "조단백 %"],
-              ["fat", "조지방 %"],
-              ["fiber", "조섬유 %"],
-              ["ash", "조회분 %"],
-              ["calcium", "칼슘 %"],
-              ["phosphorus", "인 %"],
-              ["moisture", "수분 %"],
-            ].map(([name, label]) => (
-              <label key={name}>{label}<input name={name} type="number" step="0.1" /></label>
-            ))}
+            <label>조단백 %<input name="protein" type="number" step="0.1" value={protein} onChange={(e) => setProtein(e.target.value)} /></label>
+            <label>조지방 %<input name="fat" type="number" step="0.1" value={fat} onChange={(e) => setFat(e.target.value)} /></label>
+            <label>조섬유 %<input name="fiber" type="number" step="0.1" value={fiber} onChange={(e) => setFiber(e.target.value)} /></label>
+            <label>조회분 %<input name="ash" type="number" step="0.1" value={ash} onChange={(e) => setAsh(e.target.value)} /></label>
+            <label>칼슘 %<input name="calcium" type="number" step="0.1" /></label>
+            <label>인 %<input name="phosphorus" type="number" step="0.1" /></label>
+            <label>수분 %<input name="moisture" type="number" step="0.1" value={moisture} onChange={(e) => setMoisture(e.target.value)} /></label>
           </div>
           <p className="form-note">열량을 비우면 Modified Atwater 방식으로 참고값을 계산합니다.</p>
         </section>
@@ -2415,45 +2366,119 @@ function MedicationPage({
   title,
 }: SharedProps & { type: Medication["type"]; title: string }) {
   const rows = db.medications.filter((item) => item.type === type);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingMed = rows.find((item) => item.id === editingId) ?? null;
+
+  // 캡슐/정 1개를 하루 여러 회로 나눠 먹이는 경우, "1회당 재고 차감량"을
+  // 사람이 직접 분수로 계산해 넣기 번거롭다(예: 1개 ÷ 5회 = 0.2).
+  // 그래서 "하루 총 사용량"과 "1일 횟수"만 입력하면 자동으로 나눠 계산해준다.
+  // 값을 직접 수정하면 그 이후로는 자동 계산을 멈추고 입력값을 존중한다.
+  const [perDay, setPerDay] = useState("1");
+  const [dailyAmount, setDailyAmount] = useState("");
+  const [stockPerDoseManual, setStockPerDoseManual] = useState<string | null>(null);
+
+  const perDayNum = Math.max(1, toNumber(perDay, 1));
+  const autoStockPerDose = dailyAmount.trim() ? toNumber(dailyAmount) / perDayNum : 0;
+  const stockPerDoseIsAuto = stockPerDoseManual === null;
+  const stockPerDoseValue = stockPerDoseIsAuto
+    ? (autoStockPerDose > 0 ? String(Math.round(autoStockPerDose * 1000) / 1000) : "")
+    : stockPerDoseManual;
+
+  function resetFormState() {
+    setPerDay("1");
+    setDailyAmount("");
+    setStockPerDoseManual(null);
+  }
+
+  function startEdit(med: Medication) {
+    setEditingId(med.id);
+    setPerDay(String(med.perDay));
+    setDailyAmount(String(Math.round(med.perDay * med.stockPerDose * 1000) / 1000));
+    setStockPerDoseManual(String(med.stockPerDose));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    resetFormState();
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const medication: Medication = {
-      id: uid(type === "med" ? "med" : "supp"),
+    const name = String(form.get("name") ?? "").trim();
+    if (!name) return;
+    const base = {
       type,
-      name: String(form.get("name") ?? "").trim(),
+      name,
       prescribedDate: String(form.get("prescribedDate") ?? ""),
       dose: String(form.get("dose") ?? ""),
-      perDay: Math.max(1, toNumber(form.get("perDay"), 1)),
+      perDay: perDayNum,
       stock: toNumber(form.get("stock")),
       stockUnit: String(form.get("stockUnit") ?? "회분"),
       stockPerDose: toNumber(form.get("stockPerDose"), 1),
       memo: String(form.get("memo") ?? ""),
     };
-    if (!medication.name) return;
-    updateDb((current) => ({ ...current, medications: [...current.medications, medication] }), `${medication.name}을 등록했어요.`);
+    if (editingId) {
+      updateDb(
+        (current) => ({
+          ...current,
+          medications: current.medications.map((item) =>
+            item.id === editingId ? { ...item, ...base } : item,
+          ),
+        }),
+        `${name} 정보를 수정했어요.`,
+      );
+      setEditingId(null);
+    } else {
+      const medication: Medication = { id: uid(type === "med" ? "med" : "supp"), ...base };
+      updateDb((current) => ({ ...current, medications: [...current.medications, medication] }), `${medication.name}을 등록했어요.`);
+    }
     event.currentTarget.reset();
+    resetFormState();
   }
   return (
     <>
       <PageHeader title={title} onBack={back} onHome={home} />
-      <form className="page-content form-page" onSubmit={submit}>
-        <SectionTitle title={type === "med" ? "처방 내용을 정확히 기록하세요" : "제품과 분할 급여법을 기록하세요"} />
+      <form className="page-content form-page" onSubmit={submit} key={editingId ?? "new"}>
+        <SectionTitle title={editingId ? "정보를 수정하세요" : type === "med" ? "처방 내용을 정확히 기록하세요" : "제품과 분할 급여법을 기록하세요"} />
         <section className="form-section">
-          <label>제품명<input name="name" required /></label>
+          <label>제품명<input name="name" defaultValue={editingMed?.name ?? ""} required /></label>
           <div className="field-grid">
-            <label>{type === "med" ? "처방일" : "구매일"}<input name="prescribedDate" type="date" /></label>
-            <label>1일 횟수<input name="perDay" type="number" min="1" defaultValue="1" /></label>
+            <label>{type === "med" ? "처방일" : "구매일"}<input name="prescribedDate" type="date" defaultValue={editingMed?.prescribedDate ?? ""} /></label>
+            <label>1일 횟수<input name="perDay" type="number" min="1" value={perDay} onChange={(e) => setPerDay(e.target.value)} /></label>
           </div>
-          <label>1회 급여 설명<input name="dose" placeholder={type === "supplement" ? "예: 하루 1캡슐 중 1/5회분" : "예: 1/2정"} /></label>
+          <label>1회 급여 설명<input name="dose" defaultValue={editingMed?.dose ?? ""} placeholder={type === "supplement" ? "예: 하루 1캡슐 중 1/5회분" : "예: 1/2정"} /></label>
           <div className="field-grid">
-            <label>현재 재고<input name="stock" type="number" step="0.1" /></label>
-            <label>재고 단위<input name="stockUnit" placeholder="정, 캡슐, 포" /></label>
+            <label>현재 재고<input name="stock" type="number" step="0.1" defaultValue={editingMed?.stock ?? ""} /></label>
+            <label>재고 단위<input name="stockUnit" defaultValue={editingMed?.stockUnit ?? ""} placeholder="정, 캡슐, 포" /></label>
           </div>
-          <label>1회당 재고 차감량<input name="stockPerDose" type="number" step="0.1" defaultValue="1" /></label>
-          <label>메모<textarea name="memo" placeholder="성분, 식사와 함께/별도, 보관법 등" /></label>
+          <label>하루 총 사용량<input type="number" step="0.1" value={dailyAmount} onChange={(e) => setDailyAmount(e.target.value)} placeholder="예: 1 (캡슐 1개를 하루치로)" /></label>
+          <label>
+            1회당 재고 차감량
+            <input
+              name="stockPerDose"
+              type="number"
+              step="0.001"
+              value={stockPerDoseValue}
+              onChange={(e) => setStockPerDoseManual(e.target.value)}
+            />
+          </label>
+          {stockPerDoseIsAuto && autoStockPerDose > 0 && (
+            <p className="form-note">하루 총 사용량 ÷ 1일 횟수로 자동 계산된 값이에요. 직접 입력하면 그 값을 우선 사용해요.</p>
+          )}
+          <label>메모<textarea name="memo" defaultValue={editingMed?.memo ?? ""} placeholder="성분, 식사와 함께/별도, 보관법 등" /></label>
         </section>
-        <button className="button primary full" type="submit"><Plus size={18} /> 등록</button>
+        <div className="button-grid">
+          <button className="button primary full" type="submit">
+            {editingId ? <><Save size={18} /> 수정 완료</> : <><Plus size={18} /> 등록</>}
+          </button>
+          {editingId && (
+            <button type="button" className="button secondary full" onClick={cancelEdit}>
+              취소
+            </button>
+          )}
+        </div>
       </form>
       <section className="page-content previous-section">
         <SectionTitle title={`등록된 ${type === "med" ? "처방약" : "영양제"}`} />
@@ -2469,7 +2494,12 @@ function MedicationPage({
                   <span>{med.dose || `하루 ${med.perDay}회`}</span>
                   <small>재고 {fmt(med.stock, 1)} {med.stockUnit}</small>
                 </div>
-                <button className="danger-link" onClick={() => updateDb((current) => ({ ...current, medications: current.medications.filter((item) => item.id !== med.id) }), "항목을 삭제했어요.")}>삭제</button>
+                <div className="row-actions">
+                  <IconButton label="수정" onClick={() => startEdit(med)}>
+                    <Edit3 size={17} />
+                  </IconButton>
+                  <button className="danger-link" onClick={() => updateDb((current) => ({ ...current, medications: current.medications.filter((item) => item.id !== med.id) }), "항목을 삭제했어요.")}>삭제</button>
+                </div>
               </div>
             ))}
           </div>
@@ -2556,11 +2586,30 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
 
 function HealthPage({ db, updateDb, back, home }: SharedProps) {
   const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [bcsInfoOpen, setBcsInfoOpen] = useState(false);
+  const editingRow = db.healthLog.find((item) => item.id === editingId) ?? null;
+
+  function openNewForm() {
+    setEditingId(null);
+    setFormOpen((value) => !value);
+  }
+
+  function startEdit(row: HealthRecord) {
+    setEditingId(row.id);
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditingId(null);
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const record: HealthRecord = {
-      id: uid("health"),
+    const base = {
       datetime: `${String(form.get("date") || localDate())}T${String(form.get("time") || localTime())}`,
       weightKg: form.get("weightKg") ? toNumber(form.get("weightKg")) : null,
       bcs: form.get("bcs") ? toNumber(form.get("bcs")) : null,
@@ -2571,8 +2620,19 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
       pain: form.get("pain") === "on",
       note: String(form.get("note") || ""),
     };
-    updateDb((current) => ({ ...current, healthLog: [...current.healthLog, record] }), "건강 기록을 저장했어요.");
-    setFormOpen(false);
+    if (editingId) {
+      updateDb(
+        (current) => ({
+          ...current,
+          healthLog: current.healthLog.map((item) => (item.id === editingId ? { ...item, ...base } : item)),
+        }),
+        "건강 기록을 수정했어요.",
+      );
+    } else {
+      const record: HealthRecord = { id: uid("health"), ...base };
+      updateDb((current) => ({ ...current, healthLog: [...current.healthLog, record] }), "건강 기록을 저장했어요.");
+    }
+    closeForm();
   }
   const rows = db.healthLog
     .map((item, index) => ({ item, index }))
@@ -2585,34 +2645,49 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
         onBack={back}
         onHome={home}
         action={
-          <IconButton label="건강 기록 추가" onClick={() => setFormOpen((value) => !value)}>
-            {formOpen ? <X size={20} /> : <Plus size={20} />}
+          <IconButton label="건강 기록 추가" onClick={openNewForm}>
+            {formOpen && !editingId ? <X size={20} /> : <Plus size={20} />}
           </IconButton>
         }
       />
       <div className="page-content">
         <SectionTitle title="작은 변화를 기록해보세요" />
         {formOpen && (
-          <form className="form-section health-form" onSubmit={submit}>
+          <form className="form-section health-form" onSubmit={submit} key={editingId ?? "new"}>
             <div className="field-grid">
-              <label>날짜<input name="date" type="date" defaultValue={localDate()} /></label>
-              <label>시간<input name="time" type="time" defaultValue={localTime()} /></label>
+              <label>날짜<input name="date" type="date" defaultValue={editingRow ? editingRow.datetime.slice(0, 10) : localDate()} /></label>
+              <label>시간<input name="time" type="time" defaultValue={editingRow ? editingRow.datetime.slice(11, 16) : localTime()} /></label>
             </div>
             <div className="field-grid">
-              <label>체중(kg)<input name="weightKg" type="number" step="0.01" /></label>
-              <label>BCS(1–9)<input name="bcs" type="number" min="1" max="9" /></label>
+              <label>체중(kg)<input name="weightKg" type="number" step="0.01" defaultValue={editingRow?.weightKg ?? ""} /></label>
+              <label>
+                <span className="label-with-info">
+                  BCS(1–9)
+                  <button type="button" className="info-dot" aria-label="BCS 설명 보기" onClick={() => setBcsInfoOpen(true)}>
+                    ?
+                  </button>
+                </span>
+                <input name="bcs" type="number" min="1" max="9" defaultValue={editingRow?.bcs ?? ""} />
+              </label>
             </div>
             <div className="field-grid">
-              <label>식욕<select name="appetite"><option value="good">좋음</option><option value="normal">보통</option><option value="low">저하</option><option value="none">거부</option></select></label>
-              <label>활력<select name="vitality"><option value="good">좋음</option><option value="normal">보통</option><option value="low">저하</option></select></label>
+              <label>식욕<select name="appetite" defaultValue={editingRow?.appetite ?? "normal"}><option value="good">좋음</option><option value="normal">보통</option><option value="low">저하</option><option value="none">거부</option></select></label>
+              <label>활력<select name="vitality" defaultValue={editingRow?.vitality ?? "normal"}><option value="good">좋음</option><option value="normal">보통</option><option value="low">저하</option></select></label>
             </div>
             <div className="field-grid">
-              <label>구토 횟수<input name="vomitCount" type="number" min="0" defaultValue="0" /></label>
-              <label>변 상태(1–7)<input name="stool" type="number" min="1" max="7" /></label>
+              <label>구토 횟수<input name="vomitCount" type="number" min="0" defaultValue={editingRow?.vomitCount ?? 0} /></label>
+              <label>변 상태(1–7)<input name="stool" type="number" min="1" max="7" defaultValue={editingRow?.stool ?? ""} /></label>
             </div>
-            <label className="check-label"><input name="pain" type="checkbox" /> 통증·복통 의심</label>
-            <label>특이사항<textarea name="note" placeholder="예: 산책 중 묽은 변" /></label>
-            <button className="button primary full" type="submit">기록 저장</button>
+            <label className="check-label"><input name="pain" type="checkbox" defaultChecked={editingRow?.pain ?? false} /> 통증·복통 의심</label>
+            <label>특이사항<textarea name="note" defaultValue={editingRow?.note ?? ""} placeholder="예: 산책 중 묽은 변" /></label>
+            <div className="button-grid">
+              <button className="button primary full" type="submit">{editingId ? "수정 완료" : "기록 저장"}</button>
+              {editingId && (
+                <button type="button" className="button secondary full" onClick={closeForm}>
+                  취소
+                </button>
+              )}
+            </div>
           </form>
         )}
         {rows.length ? (
@@ -2631,9 +2706,14 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
                     {row.pain && <span className="alert">통증 의심</span>}
                   </div>
                 </div>
-                <IconButton label="건강 기록 삭제" onClick={() => updateDb((current) => ({ ...current, healthLog: current.healthLog.filter((item) => item.id !== row.id) }), "건강 기록을 삭제했어요.")}>
-                  <Trash2 size={16} />
-                </IconButton>
+                <div className="row-actions">
+                  <IconButton label="건강 기록 수정" onClick={() => startEdit(row)}>
+                    <Edit3 size={16} />
+                  </IconButton>
+                  <IconButton label="건강 기록 삭제" onClick={() => updateDb((current) => ({ ...current, healthLog: current.healthLog.filter((item) => item.id !== row.id) }), "건강 기록을 삭제했어요.")}>
+                    <Trash2 size={16} />
+                  </IconButton>
+                </div>
               </article>
             ))}
           </div>
@@ -2641,6 +2721,25 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
           <EmptyState icon={<HeartPulse size={28} />} title="아직 건강 기록이 없어요" description="오른쪽 위 + 버튼으로 첫 기록을 남겨보세요." />
         )}
       </div>
+      {bcsInfoOpen && (
+        <div className="modal-backdrop" onClick={() => setBcsInfoOpen(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h2>BCS(체형 점수)란?</h2>
+              <IconButton label="닫기" onClick={() => setBcsInfoOpen(false)}>
+                <X size={20} />
+              </IconButton>
+            </div>
+            <p>
+              갈비뼈·허리 라인을 보고 만져서 평가하는 1~9점 척도의 체형 점수예요. 4~5점이 이상적인 체형이고,
+              숫자가 낮을수록 마른 편, 높을수록 비만에 가까워요. 병원에서 체크업 때 함께 알려주는 경우가 많아요.
+            </p>
+            <button className="button primary full" onClick={() => setBcsInfoOpen(false)}>
+              확인
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
