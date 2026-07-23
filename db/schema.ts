@@ -1,6 +1,20 @@
 import { sql } from "drizzle-orm";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+// 이메일+비밀번호로 로그인하는 개인 계정. 세션은 별도 테이블 없이
+// 서명된(HMAC) 쿠키로 처리한다(lib/auth.ts 참고).
+export const users = sqliteTable(
+  "users",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    displayName: text("display_name"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("users_email_idx").on(table.email)],
+);
+
 // 가족(household) 하나가 반려동물 데이터 한 벌을 공유한다.
 // 클라이언트가 쓰던 단일 JSON(Database) 구조를 그대로 data 컬럼에 저장해서
 // 기존 로컬 저장 로직과의 변환 비용 없이 서버 동기화만 얹는 방식.

@@ -1451,6 +1451,31 @@ input[type="range"] {
   gap: 9px;
 }
 
+.tab-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.tab-toggle button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 690;
+}
+
+.tab-toggle button.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(20, 18, 15, 0.12);
+}
+
 .hidden-input {
   display: none;
 }

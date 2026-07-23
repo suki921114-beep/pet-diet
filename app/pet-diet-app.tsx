@@ -972,6 +972,13 @@ export default function PetDietApp() {
     }
   }
 
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setHousehold(null);
+    setAuthState("signed-out");
+    setToast("로그아웃했어요.");
+  }
+
   function open(next: Page) {
     setHistory((items) => [...items, page]);
     setPage(next);
@@ -1428,6 +1435,8 @@ export default function PetDietApp() {
           createHousehold={createHousehold}
           joinHousehold={joinHousehold}
           leaveHousehold={leaveHousehold}
+          refreshHousehold={refreshHousehold}
+          logout={logout}
         />
       );
   }
@@ -2644,6 +2653,8 @@ function SettingsPage({
   createHousehold,
   joinHousehold,
   leaveHousehold,
+  refreshHousehold,
+  logout,
 }: SharedProps & {
   plan?: DailyPlan;
   planIsCurrent: boolean;
@@ -2657,6 +2668,8 @@ function SettingsPage({
   createHousehold: (name: string) => void;
   joinHousehold: (inviteCode: string) => void;
   leaveHousehold: () => void;
+  refreshHousehold: () => void;
+  logout: () => void;
 }) {
   const [pet, setPet] = useState(db.pet);
   const batch = db.batches.find((item) => item.id === pet.batchId);
@@ -2720,6 +2733,8 @@ function SettingsPage({
           onCreate={createHousehold}
           onJoin={joinHousehold}
           onLeave={leaveHousehold}
+          onAuthChange={refreshHousehold}
+          onLogout={logout}
         />
         <section className="form-section danger-zone">
           <h2>전체 초기화</h2>
@@ -2740,6 +2755,8 @@ function FamilySharingSection({
   onCreate,
   onJoin,
   onLeave,
+  onAuthChange,
+  onLogout,
 }: {
   authState: AuthState;
   household: HouseholdInfo | null;
@@ -2747,6 +2764,8 @@ function FamilySharingSection({
   onCreate: (name: string) => void;
   onJoin: (inviteCode: string) => void;
   onLeave: () => void;
+  onAuthChange: () => void;
+  onLogout: () => void;
 }) {
   const [name, setName] = useState("우리 가족");
   const [code, setCode] = useState("");
@@ -2764,17 +2783,7 @@ function FamilySharingSection({
     <section className="form-section">
       <h2><Users size={18} /> 가족 공유</h2>
       {authState === "checking" && <p className="form-note">로그인 상태를 확인하는 중…</p>}
-      {authState === "signed-out" && (
-        <>
-          <p className="form-note">
-            가족과 기록을 함께 보려면 먼저 ChatGPT로 로그인해주세요. 로그인 후 이 화면으로 다시
-            돌아오면 가족을 만들거나 초대 코드로 참여할 수 있어요.
-          </p>
-          <a className="button secondary full" href="/signin-with-chatgpt?return_to=%2F">
-            ChatGPT로 로그인
-          </a>
-        </>
-      )}
+      {authState === "signed-out" && <AuthForm onAuthChange={onAuthChange} />}
       {authState === "signed-in" && !household && (
         <>
           <p className="form-note">
@@ -2850,7 +2859,116 @@ function FamilySharingSection({
           </button>
         </>
       )}
+      {authState === "signed-in" && (
+        <button className="button secondary full" onClick={onLogout}>
+          <LogOut size={18} /> 로그아웃
+        </button>
+      )}
     </section>
+  );
+}
+
+function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(mode === "login" ? "/api/auth/login" : "/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          mode === "login" ? { email, password } : { email, password, displayName },
+        ),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "처리하지 못했어요. 다시 시도해주세요.");
+        return;
+      }
+      onAuthChange();
+    } catch {
+      setError("네트워크 오류가 발생했어요. 다시 시도해주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <p className="form-note">
+        가족과 기록을 함께 보려면 먼저 로그인해주세요. 계정이 없다면 회원가입으로 새로 만들 수
+        있어요.
+      </p>
+      <div className="tab-toggle">
+        <button
+          type="button"
+          className={mode === "login" ? "active" : ""}
+          onClick={() => {
+            setMode("login");
+            setError("");
+          }}
+        >
+          로그인
+        </button>
+        <button
+          type="button"
+          className={mode === "signup" ? "active" : ""}
+          onClick={() => {
+            setMode("signup");
+            setError("");
+          }}
+        >
+          회원가입
+        </button>
+      </div>
+      {mode === "signup" && (
+        <label>
+          이름(표시용)
+          <input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="예: 욱환"
+          />
+        </label>
+      )}
+      <label>
+        이메일
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          required
+        />
+      </label>
+      <label>
+        비밀번호
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder={mode === "signup" ? "8자 이상" : ""}
+          minLength={mode === "signup" ? 8 : undefined}
+          required
+        />
+      </label>
+      {error && (
+        <div className="inline-alert">
+          <ShieldAlert size={18} /> {error}
+        </div>
+      )}
+      <button className="button primary full" type="submit" disabled={busy}>
+        {mode === "login" ? "로그인" : "회원가입"}
+      </button>
+    </form>
   );
 }
 

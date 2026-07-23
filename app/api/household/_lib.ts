@@ -2,17 +2,16 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getReadyDb } from "@/db";
 import { households, householdMembers } from "@/db/schema";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getSessionUser } from "@/lib/auth";
 
-// 가족 공유 기능은 로그인한 사용자만 쓸 수 있다. 페이지 이동이 필요한
-// requireChatGPTUser(redirect 방식) 대신, API 응답으로 401을 내려준다.
+// 가족 공유 기능은 로그인한 사용자만 쓸 수 있다.
 export async function requireApiUser() {
-  const user = await getChatGPTUser();
+  const user = await getSessionUser();
   if (!user) {
     return {
       user: null,
       response: NextResponse.json(
-        { error: "로그인이 필요해요. ChatGPT로 로그인한 뒤 다시 시도해주세요." },
+        { error: "로그인이 필요해요." },
         { status: 401 },
       ),
     } as const;
