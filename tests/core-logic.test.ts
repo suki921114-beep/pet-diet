@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyMedicationDose,
   computeNextServing,
   createPlanSnapshot,
   emptyDatabase,
   feedStatus,
+  isValidStockPerDose,
   localDate,
   localTime,
   nonNegative,
   normalizeDatabase,
+  planMealCounts,
   planSettingsHash,
   remaining,
   restoreInventory,
+  roundTo,
   toNumber,
   type Batch,
   type Database,
@@ -387,5 +391,120 @@ describe("7. 백업 JSON 가져오기(정규화) / 구버전 마이그레이션"
     expect(migrated.feedLog[0].offeredG).toBe(50);
     expect(migrated.feedLog[0].eatenG).toBe(50);
     expect(migrated.feedLog[0].source).toBe("custom");
+  });
+
+  it("백업 데이터의 1회당 차감량이 0·음수여도 정규화 후에는 항상 0보다 크다", () => {
+    const raw = {
+      medications: [
+        { name: "구버전약1", type: "med", stockPerDose: 0 },
+        { name: "구버전약2", type: "med", stockPerDose: -5 },
+      ],
+    };
+    const migrated = normalizeDatabase(raw);
+    for (const med of migrated.medications) {
+      expect(med.stockPerDose).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("8. 약·영양제 1회당 차감량은 0보다 커야 한다", () => {
+  it("0·음수·빈 값·NaN·Infinity는 모두 무효하다", () => {
+    expect(isValidStockPerDose(0)).toBe(false);
+    expect(isValidStockPerDose(-1)).toBe(false);
+    expect(isValidStockPerDose("")).toBe(false);
+    expect(isValidStockPerDose(null)).toBe(false);
+    expect(isValidStockPerDose(undefined)).toBe(false);
+    expect(isValidStockPerDose(Number.NaN)).toBe(false);
+    expect(isValidStockPerDose(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+
+  it("0.2·0.25·0.5·1·1.5처럼 유효한 소수점 값은 모두 저장 가능하다", () => {
+    expect(isValidStockPerDose("0.2")).toBe(true);
+    expect(isValidStockPerDose("0.25")).toBe(true);
+    expect(isValidStockPerDose("0.5")).toBe(true);
+    expect(isValidStockPerDose("1")).toBe(true);
+    expect(isValidStockPerDose("1.5")).toBe(true);
+  });
+
+  it("재고 10, 1회당 차감량 0.2인 영양제를 1회 급여 완료하면 재고가 정확히 9.8이 된다(부동소수점 오차 없음)", () => {
+    expect(applyMedicationDose(10, 0.2)).toBe(9.8);
+    // 여러 번 반복해도 오차 없이 정확한 값을 유지한다.
+    let stock = 10;
+    stock = applyMedicationDose(stock, 0.2);
+    stock = applyMedicationDose(stock, 0.2);
+    stock = applyMedicationDose(stock, 0.2);
+    expect(stock).toBe(9.4);
+  });
+
+  it("roundTo는 부동소수점 노이즈를 지정한 소수 자릿수로 정리한다", () => {
+    expect(roundTo(9.799999999999999, 2)).toBe(9.8);
+    expect(roundTo(0.1 + 0.2, 2)).toBe(0.3);
+  });
+});
+
+describe("9. 사용자 지정 시나리오 검증", () => {
+  it("시나리오1: 재고 10, 1회당 차감량 0.2 → 1회 완료 시 재고 9.8", () => {
+    expect(applyMedicationDose(10, 0.2)).toBe(9.8);
+  });
+
+  it("시나리오3: 유효한 소수점 차감량 0.2·0.25·0.5가 모두 저장된다", () => {
+    expect(isValidStockPerDose(0.2)).toBe(true);
+    expect(isValidStockPerDose(0.25)).toBe(true);
+    expect(isValidStockPerDose(0.5)).toBe(true);
+  });
+
+  it("시나리오4: 목표량 13g·급여량 0g 기록은 섭취 열량 0, 재고는 목표량(13g) 기준으로 차감한다", () => {
+    const batch = makeBatch({ id: "b1", usedWeight: 0 });
+    const db: Database = { ...emptyDatabase(), batches: [batch] };
+    const record = makeFeedRecord({
+      source: "batch",
+      batchId: "b1",
+      offeredG: 13,
+      eatenG: 0,
+      naturalOfferedG: 13,
+      naturalEatenG: 0,
+      calculatedKcal: 0,
+    });
+    const applied = restoreInventory(db, record, 1);
+    expect(applied.batches[0].usedWeight).toBe(13);
+    expect(record.calculatedKcal).toBe(0);
+  });
+
+  it("시나리오5: 급여량 0g 기록은 '먹지 않음' 상태이고, 계획 급여 집계는 시도 1회·섭취 0회로 분리된다", () => {
+    const record = makeFeedRecord({ source: "plan", offeredG: 13, eatenG: 0 });
+    expect(feedStatus(record)).toBe("none");
+    const counts = planMealCounts([record]);
+    expect(counts.attempted).toBe(1);
+    expect(counts.eaten).toBe(0);
+  });
+
+  it("시나리오6: 자연식 비율이 0%(사료만 사용)인 계획은 다음 급여의 자연식 그램수가 0이다", () => {
+    const dryOnlyPlan = {
+      date: "2026-07-24",
+      targetKcal: 400,
+      feedings: 2,
+      naturalRatio: 0,
+      batchId: "",
+      dryFoodId: "d1",
+      naturalKcalPer100: 0,
+      dryKcalPer100: 350,
+      totalNaturalGrams: 0,
+      totalDryGrams: 114,
+      settingsHash: "x",
+      appliedAt: "2026-07-24T00:00:00.000Z",
+    };
+    const result = computeNextServing(dryOnlyPlan, [], 0)!;
+    expect(result.naturalG).toBe(0);
+    expect(result.dryG).toBeGreaterThan(0);
+  });
+
+  it("시나리오7: 기존 데이터 백업·복원은 여전히 값을 그대로 유지한다", () => {
+    const original: Database = {
+      ...emptyDatabase(),
+      pet: { ...emptyDatabase().pet, name: "봄이", dailyTargetKcal: 400 },
+    };
+    const restored = normalizeDatabase(JSON.parse(JSON.stringify(original)));
+    expect(restored.pet.name).toBe("봄이");
+    expect(restored.pet.dailyTargetKcal).toBe(400);
   });
 });

@@ -446,7 +446,9 @@ export function normalizeDatabase(raw: unknown): Database {
         perDay: Math.max(1, toNumber(m.perDay, 1)),
         stock: toNumber(m.stock),
         stockUnit: String(m.stockUnit ?? "회분"),
-        stockPerDose: toNumber(m.stockPerDose, 1),
+        // 1회당 차감량은 등록·수정·급여 완료 어디서든 0 이하가 될 수 없다.
+        // 예전 백업 데이터에 0·음수·빈 값이 남아있어도 여기서 안전한 기본값(1)로 대체한다.
+        stockPerDose: toNumber(m.stockPerDose) > 0 ? toNumber(m.stockPerDose) : 1,
         memo: String(m.memo ?? ""),
       }))
     : base.medications;
@@ -562,6 +564,29 @@ export function remaining(total: number, used: number) {
   return Math.max(0, total - used);
 }
 
+// 약·영양제 1회당 차감량은 재고 관리의 기준이 되는 값이라, 0이면 재고가
+// 전혀 줄지 않는데도 "급여 완료" 처리가 가능해지는 문제가 생긴다. 그래서
+// 등록·수정·급여 완료 어디서든 이 함수 하나로 동일한 규칙을 적용한다:
+// 유한한 값이면서 0보다 커야 유효하다(소수점은 허용).
+export function isValidStockPerDose(value: unknown): boolean {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0;
+}
+
+// 0.2·0.25처럼 소수점 차감량을 반복해서 빼거나 더하면 부동소수점 오차로
+// 9.799999999999999 같은 값이 그대로 저장·표시될 수 있다. 재고 값을 쓸
+// 때마다 소수 3자리로 반올림해 화면에 지저분한 값이 노출되지 않게 한다.
+export function roundTo(value: number, decimals = 3) {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+// 약·영양제를 1회 급여 완료 처리할 때 재고에서 실제로 빼는 양을 계산하는
+// 순수 함수. 부동소수점 오차가 쌓이지 않도록 항상 roundTo를 거친다.
+export function applyMedicationDose(stock: number, stockPerDose: number) {
+  return roundTo(Math.max(0, stock - stockPerDose));
+}
+
 export function planSettingsHash(db: Database) {
   const pet = db.pet;
   const batch = db.batches.find((item) => item.id === pet.batchId);
@@ -636,6 +661,17 @@ function feedStatusLabel(status: "eaten" | "partial" | "none") {
   return status === "none" ? "먹지 않음" : status === "partial" ? "일부 섭취" : "섭취 완료";
 }
 
+// 오늘 계획된 급여 중 "시도한" 횟수(0g만 먹었어도 슬롯은 소모됨)와 실제로
+// "먹은" 횟수는 다를 수 있다. 화면과 스크린리더 문구 모두 이 두 값을
+// 분리해서 보여줘야 "4회 중 1회 완료"처럼 0g도 완료로 오해되지 않는다.
+export function planMealCounts(todayFeeds: FeedRecord[]) {
+  const planFeeds = todayFeeds.filter((item) => item.source === "plan");
+  return {
+    attempted: planFeeds.length,
+    eaten: planFeeds.filter((item) => feedStatus(item) === "eaten").length,
+  };
+}
+
 function IconButton({
   label,
   onClick,
@@ -703,9 +739,17 @@ function SectionTitle({
   );
 }
 
-function ProgressSegments({ done, total }: { done: number; total: number }) {
+function ProgressSegments({
+  done,
+  total,
+  label,
+}: {
+  done: number;
+  total: number;
+  label?: string;
+}) {
   return (
-    <div className="segments" aria-label={`${total}회 중 ${done}회 완료`}>
+    <div className="segments" aria-label={label ?? `${total}회 중 ${done}회 완료`}>
       {Array.from({ length: Math.max(1, total) }, (_, index) => (
         <span key={index} className={index < done ? "done" : ""} />
       ))}
@@ -1106,13 +1150,7 @@ export default function PetDietApp() {
   const todayKcal = todayFeeds.reduce((sum, item) => sum + item.calculatedKcal, 0);
   const todayPlan = db.dailyPlans[today];
   const planIsCurrent = todayPlan?.settingsHash === planSettingsHash(db);
-  const completedPlanMeals = todayFeeds.filter((item) => item.source === "plan").length;
-  // 급여를 "시도"한 횟수(completedPlanMeals)와 실제로 "먹은" 횟수는 다를 수
-  // 있다. 0g을 먹었어도 급여 슬롯은 소모된 것으로 계산해야 다음 끼니 양이
-  // 정확히 재분배되지만, 화면에는 완료로 오해하지 않도록 따로 보여준다.
-  const eatenPlanMeals = todayFeeds.filter(
-    (item) => item.source === "plan" && feedStatus(item) === "eaten",
-  ).length;
+  const { attempted: completedPlanMeals, eaten: eatenPlanMeals } = planMealCounts(todayFeeds);
 
   const nextServing = useMemo(
     () => computeNextServing(todayPlan, todayFeeds, completedPlanMeals),
@@ -1327,6 +1365,13 @@ export default function PetDietApp() {
       setToast("오늘 예정 횟수를 이미 모두 완료했어요.");
       return;
     }
+    // 1회당 차감량이 0 이하·NaN이면 재고가 전혀 줄지 않으면서 "완료"만
+    // 기록되는 상황이 생긴다. 등록 화면에서 막고 있지만, 예전 백업 데이터
+    // 등으로 여기까지 들어올 수 있으니 급여 완료 시점에도 한 번 더 막는다.
+    if (!isValidStockPerDose(medication.stockPerDose)) {
+      setToast(`${medication.name}의 1회당 차감량 정보가 올바르지 않아요. 등록 정보를 다시 확인해주세요.`);
+      return;
+    }
     if (medication.stock < medication.stockPerDose) {
       setToast(`${medication.name} 재고가 부족해요.`);
       return;
@@ -1342,7 +1387,7 @@ export default function PetDietApp() {
         ...current,
         medications: current.medications.map((item) =>
           item.id === medication.id
-            ? { ...item, stock: Math.max(0, item.stock - medication.stockPerDose) }
+            ? { ...item, stock: applyMedicationDose(item.stock, medication.stockPerDose) }
             : item,
         ),
         medLog: [...current.medLog, log],
@@ -1357,7 +1402,7 @@ export default function PetDietApp() {
         ...current,
         medications: current.medications.map((item) =>
           item.id === log.medicationId
-            ? { ...item, stock: item.stock + log.stockUsed }
+            ? { ...item, stock: roundTo(item.stock + log.stockUsed) }
             : item,
         ),
         medLog: current.medLog.filter((item) => item.id !== log.id),
@@ -1695,8 +1740,12 @@ function HomePage({
               nextServing.remainingMeals > 0 ? (
                 <>
                   <h2>
-                    자연식 {fmt(nextServing.naturalG)}g
-                    {nextServing.dryG > 0 && ` + 사료 ${fmt(nextServing.dryG)}g`}
+                    {[
+                      nextServing.naturalG > 0 ? `자연식 ${fmt(nextServing.naturalG)}g` : null,
+                      nextServing.dryG > 0 ? `사료 ${fmt(nextServing.dryG)}g` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" + ") || "급여 없음"}
                   </h2>
                   <p>
                     {completedPlanMeals + 1}/{todayPlan.feedings}번째 · 약 {fmt(nextServing.kcal)} kcal
@@ -1751,6 +1800,7 @@ function HomePage({
             <ProgressSegments
               done={completedPlanMeals}
               total={todayPlan?.feedings ?? db.pet.feedingsPerDay}
+              label={`${todayPlan?.feedings ?? db.pet.feedingsPerDay}회 중 급여 시도 ${completedPlanMeals}회, 섭취 ${eatenPlanMeals}회`}
             />
             <span>
               {completedPlanMeals}/{todayPlan?.feedings ?? db.pet.feedingsPerDay}회 급여 시도
@@ -1901,7 +1951,7 @@ function HomePage({
                         )}
                       </span>
                       <span>
-                        목표 {fmt(record.offeredG)}g · 급여 {fmt(record.eatenG)}g ·{" "}
+                        목표량 {fmt(record.offeredG)}g · 급여량 {fmt(record.eatenG)}g ·{" "}
                         {fmt(record.calculatedKcal)}kcal
                       </span>
                       {feedBreakdownText(record) && <span className="breakdown">{feedBreakdownText(record)}</span>}
@@ -2523,7 +2573,7 @@ function DryFoodPage({ db, updateDb, back, home, setToast, today }: SharedProps)
                 onClick={() => {
                   const inUse = db.pet.dryFoodId === food.id || db.dailyPlans[today]?.dryFoodId === food.id;
                   if (inUse) {
-                    setToast(`${food.name}은(는) 현재 급여 계획에 연결돼 있어 삭제할 수 없어요. 급여 계획에서 다른 사료로 바꾼 뒤 삭제해주세요.`);
+                    setToast("해당 사료는 현재 급여 계획에 연결돼 있어 삭제할 수 없어요. 급여 계획에서 다른 사료로 바꾼 뒤 삭제해주세요.");
                     return;
                   }
                   updateDb((current) => ({ ...current, dryFoods: current.dryFoods.filter((item) => item.id !== food.id) }), "사료를 삭제했어요.");
@@ -2652,19 +2702,21 @@ function MedicationPage({
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") ?? "").trim();
     if (!name) return;
-    // 재고·사용량은 음수를 조용히 0으로 보정하지 않고, 이유를 알려주고
-    // 저장 자체를 막는다.
-    if (dailyAmount.trim() && Number(dailyAmount) < 0) {
-      setToast("하루 총 사용량은 음수로 입력할 수 없어요.");
+    // 재고·사용량은 음수·0·빈 값·NaN을 조용히 보정하지 않고, 이유를 알려주고
+    // 저장 자체를 막는다. 특히 1회당 차감량은 0이면 재고가 전혀 줄지 않는데도
+    // "급여 완료" 처리가 가능해지므로 반드시 0보다 커야 한다.
+    if (dailyAmount.trim() && !(Number(dailyAmount) >= 0)) {
+      setToast("하루 총 사용량은 0 이상의 숫자로 입력해 주세요.");
       return;
     }
     const stockRaw = form.get("stock");
-    if (stockRaw !== null && String(stockRaw).trim() && Number(stockRaw) < 0) {
-      setToast("재고는 음수로 입력할 수 없어요.");
+    if (stockRaw !== null && String(stockRaw).trim() && !(Number(stockRaw) >= 0)) {
+      setToast("재고는 0 이상의 숫자로 입력해 주세요.");
       return;
     }
-    if (stockPerDoseManual !== null && stockPerDoseManual.trim() && Number(stockPerDoseManual) < 0) {
-      setToast("1회당 재고 차감량은 음수로 입력할 수 없어요.");
+    const stockPerDoseRaw = form.get("stockPerDose");
+    if (!isValidStockPerDose(stockPerDoseRaw)) {
+      setToast("1회당 차감량은 0보다 큰 숫자로 입력해 주세요.");
       return;
     }
     const base = {
@@ -2675,7 +2727,7 @@ function MedicationPage({
       perDay: perDayNum,
       stock: toNumber(form.get("stock")),
       stockUnit: String(form.get("stockUnit") ?? "회분"),
-      stockPerDose: toNumber(form.get("stockPerDose"), 1),
+      stockPerDose: Number(stockPerDoseRaw),
       memo: String(form.get("memo") ?? ""),
     };
     if (editingId) {
@@ -2699,7 +2751,7 @@ function MedicationPage({
   return (
     <>
       <PageHeader title={title} onBack={back} onHome={home} />
-      <form className="page-content form-page" onSubmit={submit} key={editingId ?? "new"}>
+      <form className="page-content form-page" onSubmit={submit} noValidate key={editingId ?? "new"}>
         <SectionTitle title={editingId ? "정보를 수정하세요" : type === "med" ? "처방 내용을 정확히 기록하세요" : "제품과 분할 급여법을 기록하세요"} />
         <section className="form-section">
           <label>제품명<input name="name" defaultValue={editingMed?.name ?? ""} required /></label>
@@ -2709,7 +2761,7 @@ function MedicationPage({
           </div>
           <label>1회 급여 설명<input name="dose" defaultValue={editingMed?.dose ?? ""} placeholder={type === "supplement" ? "예: 하루 1캡슐 중 1/5회분" : "예: 1/2정"} /></label>
           <div className="field-grid">
-            <label>현재 재고<input name="stock" type="number" step="0.1" min="0" defaultValue={editingMed?.stock ?? ""} /></label>
+            <label>현재 재고<input name="stock" type="number" step="0.1" min="0" defaultValue={editingMed ? roundTo(editingMed.stock, 2) : ""} /></label>
             <label>재고 단위<input name="stockUnit" defaultValue={editingMed?.stockUnit ?? ""} placeholder="정, 캡슐, 포" /></label>
           </div>
           <label>하루 총 사용량<input type="number" step="0.1" min="0" value={dailyAmount} onChange={(e) => setDailyAmount(e.target.value)} placeholder="예: 1 (캡슐 1개를 하루치로)" /></label>
@@ -2718,8 +2770,8 @@ function MedicationPage({
             <input
               name="stockPerDose"
               type="number"
-              step="0.001"
-              min="0"
+              step="any"
+              min="0.01"
               value={stockPerDoseValue}
               onChange={(e) => setStockPerDoseManual(e.target.value)}
             />
@@ -2816,7 +2868,7 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
             </div>
           ))}
         </div>
-        <SectionTitle title="자연식 재고" description="목표량을 기준으로 자동 차감됩니다." />
+        <SectionTitle title="자연식 재고" description="재고는 목표량을 기준으로 차감됩니다." />
         <div className="inventory-list">
           {db.batches.map((batch) => {
             const remain = remaining(batch.totalWeight, batch.usedWeight);
@@ -2846,7 +2898,7 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
             );
           })}
         </div>
-        <SectionTitle title="시중사료 재고" />
+        <SectionTitle title="시중사료 재고" description="재고는 목표량을 기준으로 차감됩니다." />
         <div className="inventory-list">
           {db.dryFoods.map((food) => {
             const value = percent(food.usedWeight, food.totalWeight);
@@ -2858,7 +2910,7 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
             );
           })}
         </div>
-        <SectionTitle title="간식 재고" />
+        <SectionTitle title="간식 재고" description="재고는 목표량을 기준으로 차감됩니다." />
         <div className="inventory-list">
           {db.snacks.map((snack) => {
             const value = percent(snack.usedWeight, snack.totalWeight);
@@ -2957,7 +3009,7 @@ function HealthPage({ db, updateDb, back, home, setToast }: SharedProps) {
       <div className="page-content">
         <SectionTitle title="작은 변화를 기록해보세요" />
         {formOpen && (
-          <form className="form-section health-form" onSubmit={submit} key={editingId ?? "new"}>
+          <form className="form-section health-form" onSubmit={submit} noValidate key={editingId ?? "new"}>
             <div className="field-grid">
               <label>날짜<input name="date" type="date" defaultValue={editingRow ? editingRow.datetime.slice(0, 10) : localDate()} /></label>
               <label>시간<input name="time" type="time" defaultValue={editingRow ? editingRow.datetime.slice(11, 16) : localTime()} /></label>
@@ -2971,7 +3023,7 @@ function HealthPage({ db, updateDb, back, home, setToast }: SharedProps) {
                     ?
                   </button>
                 </span>
-                <input name="bcs" type="number" min="1" max="9" defaultValue={editingRow?.bcs ?? ""} />
+                <input name="bcs" type="number" min="1" max="9" aria-label="BCS(1–9)" defaultValue={editingRow?.bcs ?? ""} />
               </label>
             </div>
             <div className="field-grid">
@@ -3248,7 +3300,7 @@ function RecordsPage({
                         </span>
                       )}
                     </span>
-                    <span>목표 {fmt(record.offeredG)}g · 급여 {fmt(record.eatenG)}g · {fmt(record.calculatedKcal)}kcal</span>
+                    <span>목표량 {fmt(record.offeredG)}g · 급여량 {fmt(record.eatenG)}g · {fmt(record.calculatedKcal)}kcal</span>
                     {feedBreakdownText(record) && <span className="breakdown">{feedBreakdownText(record)}</span>}
                     {record.note && <small>{record.note}</small>}
                   </div>
@@ -3326,8 +3378,28 @@ function FeedingPlanPage({
           <label className="range-label">자연식 비율 <strong>{ratio}%</strong><input type="range" min="0" max="100" step="5" value={ratio} disabled={!batch || !dry} onChange={(e) => setPet({ ...pet, naturalRatio: Number(e.target.value) })} /></label>
           <p className="form-note">{batch && !dry ? "자연식만 선택되어 100%로 고정됩니다." : !batch && dry ? "건식만 선택되어 0%로 고정됩니다." : "두 급여원을 모두 선택했을 때만 비율을 조정할 수 있습니다."}</p>
           <div className="plan-preview">
-            <div><span>하루 총량</span><strong>자연식 {fmt(naturalG, 1)}g · 사료 {fmt(dryG, 1)}g</strong></div>
-            <div><span>1회분</span><strong>자연식 {fmt(naturalG / pet.feedingsPerDay, 1)}g · 사료 {fmt(dryG / pet.feedingsPerDay, 1)}g</strong></div>
+            <div>
+              <span>하루 총량</span>
+              <strong>
+                {[
+                  batch ? `자연식 ${fmt(naturalG, 1)}g` : null,
+                  dry ? `사료 ${fmt(dryG, 1)}g` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "급여원을 선택해주세요"}
+              </strong>
+            </div>
+            <div>
+              <span>1회분</span>
+              <strong>
+                {[
+                  batch ? `자연식 ${fmt(naturalG / pet.feedingsPerDay, 1)}g` : null,
+                  dry ? `사료 ${fmt(dryG / pet.feedingsPerDay, 1)}g` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "급여원을 선택해주세요"}
+              </strong>
+            </div>
           </div>
           <button className="button primary full" onClick={saveSettings}><Save size={18} /> 설정 저장</button>
           <button className={`button full ${draftPlanIsCurrent ? "success" : "ink"}`} onClick={() => applyTodayPlan(pet)}>
@@ -3683,6 +3755,7 @@ function FeedSheet({
       <div className="bottom-sheet">
         <div className="sheet-handle" />
         <div className="sheet-head"><div><span className="eyebrow">이번 끼니</span><h2>목표량과 급여량</h2></div><IconButton label="닫기" onClick={onClose}><X size={20} /></IconButton></div>
+        <p className="form-note">재고는 목표량을 기준으로 차감됩니다. 섭취 열량은 실제 급여량을 기준으로 계산됩니다.</p>
         {plan.batchId && <div className="sheet-source"><strong>자연식</strong><div className="field-grid"><label>목표량(g)<input type="number" step="1" value={naturalOfferedG} onChange={(e) => changeNaturalOffered(Number(e.target.value))} /></label><label>급여량(g)<input type="number" step="1" value={naturalEatenG} onChange={(e) => changeNaturalEaten(Number(e.target.value))} /></label></div></div>}
         {plan.dryFoodId && <div className="sheet-source"><strong>시중사료</strong><div className="field-grid"><label>목표량(g)<input type="number" step="1" value={dryOfferedG} onChange={(e) => changeDryOffered(Number(e.target.value))} /></label><label>급여량(g)<input type="number" step="1" value={dryEatenG} onChange={(e) => changeDryEaten(Number(e.target.value))} /></label></div></div>}
         <label>메모<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="남긴 이유, 식욕 등" /></label>
@@ -3845,6 +3918,7 @@ function FeedEditor({
       <div className="bottom-sheet">
         <div className="sheet-handle" />
         <div className="sheet-head"><div><span className="eyebrow">기록 수정</span><h2>{record.label}</h2></div><IconButton label="닫기" onClick={onClose}><X size={20} /></IconButton></div>
+        <p className="form-note">재고는 목표량을 기준으로 차감됩니다. 섭취 열량은 실제 급여량을 기준으로 계산됩니다.</p>
         <label>날짜와 시간<input type="datetime-local" value={datetime} onChange={(e) => setDatetime(e.target.value)} /></label>
         {isMixed ? (
           <>
