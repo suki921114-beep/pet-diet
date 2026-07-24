@@ -152,10 +152,19 @@ textarea:focus-visible {
 }
 
 .home-topbar h1 {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 2px 0 0;
+  overflow: hidden;
   font-size: clamp(26px, 7vw, 32px);
   font-weight: 790;
   letter-spacing: -0.045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-topbar .home-greeting-row {
+  min-width: 0;
 }
 
 .home-date {
@@ -806,6 +815,16 @@ textarea::placeholder {
   width: 106px;
   height: 106px;
   border-width: 8px;
+}
+
+/* 반려동물 선택 줄(관리 화면 상단, 메인 화면 전환 시트)처럼 여러 마리를
+   한 줄에 늘어놓아야 하는 자리에서 쓰는 축소판. 44×44 터치 영역을 채우되
+   테두리는 얇게 줄여 목록이 촘촘해 보이지 않게 한다. */
+.pet-avatar.small {
+  width: 44px;
+  height: 44px;
+  border-width: 2px;
+  box-shadow: none;
 }
 
 .avatar-photo {
@@ -1605,34 +1624,149 @@ input[type="range"] {
   gap: 9px;
 }
 
-.pet-switch-list {
+/* 반려동물 관리 화면 상단: 제목/박스 없이 원형 아이콘+이름을 가로로
+   나열하고 맨 끝에 추가(+) 버튼을 둔다. 반려동물이 많아지면 이 줄만
+   가로 스크롤된다. */
+.pet-select-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 4px 2px 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-.pet-switch-chip {
-  display: inline-flex;
+.pet-select-item {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface-soft);
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 690;
+  gap: 4px;
+  min-width: 44px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
 }
 
-.pet-switch-chip.active {
+.pet-select-item .pet-avatar.small {
+  border-color: transparent;
+}
+
+.pet-select-item.active .pet-avatar.small {
   border-color: var(--terracotta);
-  background: var(--terracotta-soft);
+  background: linear-gradient(140deg, var(--terracotta-soft), var(--terracotta-soft));
   color: var(--terracotta);
 }
 
-.pet-switch-chip:focus-visible {
+.pet-select-item span {
+  max-width: 68px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 690;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-select-item.active span {
+  color: var(--terracotta);
+}
+
+.pet-select-item:focus-visible {
   outline: 2px solid var(--terracotta);
   outline-offset: 2px;
+  border-radius: 12px;
+}
+
+.pet-add-circle {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 44px;
+  height: 44px;
+  margin-top: 5px;
+  border: 1.5px dashed var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+/* 반려동물 정보 수정 화면: "정보 저장" 버튼보다 시각적 우선순위가 낮은
+   보조(destructive) 삭제 버튼. */
+.pet-delete-button {
+  margin-top: 10px;
+}
+
+/* 메인 화면 인사말 옆의 작은 반려동물 전환 아이콘(32~36px 원형 ghost)과
+   그걸 눌렀을 때 뜨는 선택 시트. */
+.home-greeting-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pet-switch-trigger {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+}
+
+.pet-switch-trigger:hover {
+  background: var(--surface-soft);
+}
+
+.pet-switch-sheet {
+  width: 100%;
+  max-width: 360px;
+  padding: 18px;
+  border-radius: 22px 22px 0 0;
+  background: var(--surface);
+}
+
+@media (min-width: 640px) {
+  .pet-switch-sheet {
+    border-radius: 22px;
+  }
+}
+
+.pet-switch-sheet h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.pet-switch-sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pet-switch-sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.pet-switch-sheet-row:hover {
+  background: var(--surface-soft);
+}
+
+.pet-switch-sheet-check {
+  margin-left: auto;
+  color: var(--terracotta);
 }
 
 .tab-toggle {

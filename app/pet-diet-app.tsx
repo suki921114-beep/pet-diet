@@ -10,6 +10,7 @@ import {
   Camera,
   Check,
   ChevronRight,
+  ChevronsUpDown,
   ClipboardList,
   Cookie,
   Download,
@@ -983,22 +984,24 @@ function percent(used: number, total: number) {
 
 function PetAvatar({
   large = false,
+  small = false,
   photoUrl,
   editable = false,
   onPick,
 }: {
   large?: boolean;
+  small?: boolean;
   photoUrl?: string | null;
   editable?: boolean;
   onPick?: (file: File) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   return (
-    <div className={`pet-avatar ${large ? "large" : ""}`}>
+    <div className={`pet-avatar ${large ? "large" : ""} ${small ? "small" : ""}`}>
       {photoUrl ? (
         <img src={photoUrl} alt="반려동물 프로필 사진" className="avatar-photo" />
       ) : (
-        <PawPrint size={large ? 44 : 25} strokeWidth={1.9} />
+        <PawPrint size={large ? 44 : small ? 18 : 25} strokeWidth={1.9} />
       )}
       {editable && (
         <>
@@ -2066,6 +2069,8 @@ type SharedProps = {
 
 function HomePage({
   db,
+  pets,
+  switchPet,
   open,
   today,
   todayFeeds,
@@ -2101,6 +2106,7 @@ function HomePage({
   editFeed: (record: FeedRecord) => void;
 }) {
   const [healthNote, setHealthNote] = useState("");
+  const [petMenuOpen, setPetMenuOpen] = useState(false);
   const target = todayPlan?.targetKcal ?? effectiveTarget(db.pet);
   const progress = target > 0 ? Math.min(100, (todayKcal / target) * 100) : 0;
   const medLogs = dateRecords(db.medLog, today);
@@ -2136,12 +2142,49 @@ function HomePage({
       <div className="home-topbar">
         <div>
           <span className="home-date">{dateLabel}</span>
-          <h1>{db.pet.name ? `${db.pet.name}, 밥먹자!` : "댕댕아, 밥먹자!"}</h1>
+          <div className="home-greeting-row">
+            <h1>{db.pet.name ? `${db.pet.name}, 밥먹자!` : "댕댕아, 밥먹자!"}</h1>
+            {/* 반려동물이 한 마리뿐이면 전환할 대상이 없으므로 아이콘 자체를 숨긴다. */}
+            {pets.length > 1 && (
+              <button
+                type="button"
+                className="pet-switch-trigger"
+                aria-label="다른 반려동물로 변경"
+                onClick={() => setPetMenuOpen(true)}
+              >
+                <ChevronsUpDown size={16} />
+              </button>
+            )}
+          </div>
         </div>
         <IconButton label="설정 메뉴" onClick={() => open("menu")} className="gear-button">
           <Settings size={23} />
         </IconButton>
       </div>
+      {petMenuOpen && (
+        <div className="modal-backdrop" onClick={() => setPetMenuOpen(false)}>
+          <div className="pet-switch-sheet" onClick={(event) => event.stopPropagation()}>
+            <h2>반려동물 전환</h2>
+            <div className="pet-switch-sheet-list">
+              {pets.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="pet-switch-sheet-row"
+                  onClick={() => {
+                    switchPet(item.id);
+                    setPetMenuOpen(false);
+                  }}
+                >
+                  <PetAvatar small photoUrl={item.photoDataUrl} />
+                  <span>{item.name || "이름 없음"}</span>
+                  {item.id === db.pet.id && <Check size={18} className="pet-switch-sheet-check" />}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="home-content">
         <section className="daily-summary">
@@ -2475,34 +2518,31 @@ function MenuPage({ db, open, back, home }: SharedProps) {
   );
 }
 
-function PetPage({ db, pets, switchPet, deletePet, open, back, home }: SharedProps) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const canDelete = pets.length > 1;
+function PetPage({ db, pets, switchPet, open, back, home }: SharedProps) {
   return (
     <>
       <PageHeader title="반려동물 관리" onBack={back} onHome={home} />
       <div className="page-content">
-        {/* 한 마리만 있으면 선택기를 아예 보여주지 않는다 — 다견 UI가 불필요하게
-            복잡해 보이지 않게 하기 위해서다. */}
-        {pets.length > 1 && (
-          <section className="form-section">
-            <h2>반려동물 선택</h2>
-            <div className="pet-switch-list">
-              {pets.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`pet-switch-chip ${item.id === db.pet.id ? "active" : ""}`}
-                  aria-pressed={item.id === db.pet.id}
-                  onClick={() => switchPet(item.id)}
-                >
-                  <PetAvatar photoUrl={item.photoDataUrl} />
-                  <span>{item.name || "이름 없음"}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
+        {/* 제목이나 박스 없이, 등록된 반려동물의 원형 아이콘+이름을 가로로
+            나열하고 맨 끝에 추가(+) 버튼을 둔다. 반려동물이 많아지면 이 줄만
+            가로로 스크롤된다. */}
+        <div className="pet-select-row">
+          {pets.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`pet-select-item ${item.id === db.pet.id ? "active" : ""}`}
+              aria-pressed={item.id === db.pet.id}
+              onClick={() => switchPet(item.id)}
+            >
+              <PetAvatar small photoUrl={item.photoDataUrl} />
+              <span>{item.name || "이름 없음"}</span>
+            </button>
+          ))}
+          <IconButton label="반려동물 추가" onClick={() => open("pet-add")} className="pet-add-circle">
+            <Plus size={20} />
+          </IconButton>
+        </div>
         <section className="pet-profile-card">
           <PetAvatar large photoUrl={db.pet.photoDataUrl} />
           <div className="pet-name-row">
@@ -2544,43 +2584,12 @@ function PetPage({ db, pets, switchPet, deletePet, open, back, home }: SharedPro
             <strong>{db.pet.condition === "chronic" ? "만성질환" : db.pet.condition === "acute" ? "회복기" : "일반"}</strong>
           </div>
         </div>
-        <div className="button-grid">
-          <button className="button secondary" onClick={() => open("pet-add")}>
-            <Plus size={18} /> 반려동물 추가
-          </button>
-          <button
-            className="button danger-outline"
-            disabled={!canDelete}
-            title={canDelete ? undefined : "마지막 반려동물은 삭제할 수 없어요."}
-            onClick={() => setConfirmDelete(true)}
-          >
-            <Trash2 size={18} /> 이 반려동물 삭제
-          </button>
-        </div>
-        {confirmDelete && (
-          <ConfirmDialog title="반려동물 삭제" onClose={() => setConfirmDelete(false)}>
-            <p className="form-note warning">
-              {db.pet.name || "이 반려동물"}을 삭제하면 급여·재고·건강·통계 기록도 함께 영구히
-              삭제돼요. 되돌릴 수 없어요.
-            </p>
-            <button
-              className="button danger full"
-              onClick={() => {
-                deletePet(db.pet.id);
-                setConfirmDelete(false);
-                back();
-              }}
-            >
-              삭제 확정
-            </button>
-          </ConfirmDialog>
-        )}
       </div>
     </>
   );
 }
 
-function PetEditPage({ db, updateDb, back, home }: SharedProps) {
+function PetEditPage({ db, pets, deletePet, updateDb, open, back, home }: SharedProps) {
   const [pet, setPet] = useState(db.pet);
   // 체중·목표체중·활동량·질환·체중목표가 바뀔 때마다 참고 열량을 다시 계산해
   // 1일 목표 kcal에 자동으로 반영한다. dailyTargetKcal을 직접 입력칸에서
@@ -2595,6 +2604,13 @@ function PetEditPage({ db, updateDb, back, home }: SharedProps) {
     event.preventDefault();
     updateDb((current) => withPet(current, pet.id, () => pet), "반려동물 정보를 저장했어요.");
     back();
+  }
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const canDelete = pets.length > 1;
+  function confirmedDelete() {
+    deletePet(pet.id);
+    setConfirmDelete(false);
+    open("pet");
   }
   return (
     <>
@@ -2697,7 +2713,33 @@ function PetEditPage({ db, updateDb, back, home }: SharedProps) {
           <Save size={18} />
           정보 저장
         </button>
+        <button
+          type="button"
+          className="button danger-outline full pet-delete-button"
+          disabled={!canDelete}
+          onClick={() => setConfirmDelete(true)}
+        >
+          <Trash2 size={18} />
+          반려동물 정보 삭제
+        </button>
+        {!canDelete && <p className="form-note">마지막 반려동물은 삭제할 수 없어요.</p>}
       </form>
+      {confirmDelete && (
+        <ConfirmDialog title={`${pet.name || "이 반려동물"}의 정보를 삭제할까요?`} onClose={() => setConfirmDelete(false)}>
+          <p className="form-note warning">
+            반려동물 정보를 삭제하면 해당 반려동물의 급여, 식단, 체중, 건강, 복약 기록 등 기존 데이터도 모두
+            삭제되며 복구할 수 없습니다. 그래도 삭제할까요?
+          </p>
+          <div className="button-grid">
+            <button className="button secondary" onClick={() => setConfirmDelete(false)}>
+              아니요, 취소
+            </button>
+            <button className="button danger" onClick={confirmedDelete}>
+              예, 삭제할게요
+            </button>
+          </div>
+        </ConfirmDialog>
+      )}
     </>
   );
 }
@@ -4134,6 +4176,15 @@ function ConfirmDialog({
   onClose: () => void;
   children: ReactNode;
 }) {
+  // 바깥 영역 클릭(위의 onClick={onClose})뿐 아니라 Esc 키로도 안전하게
+  // 닫을 수 있어야 한다(반려동물 삭제 확인 팝업 등).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(event) => event.stopPropagation()}>
