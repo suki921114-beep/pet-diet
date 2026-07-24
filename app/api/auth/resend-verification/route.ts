@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 import { getReadyDb } from "@/db";
 import { users } from "@/db/schema";
 import { getSessionUser } from "@/lib/auth";
-import { createAuthToken } from "@/lib/authTokens";
-import { sendVerificationEmail } from "@/lib/email";
+import { createAuthToken, invalidateAuthToken } from "@/lib/authTokens";
+import { isEmailServiceConfigured, sendVerificationEmail } from "@/lib/email";
 import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export async function POST() {
     windowMs: 60 * 60 * 1000,
   });
   if (!rate.allowed) {
-    return NextResponse.json({ error: rateLimitMessage() }, { status: 429 });
+    return NextResponse.json({ error: rateLimitMessage(), code: "RATE_LIMITED" }, { status: 429 });
   }
 
   const database = await getReadyDb();
@@ -33,10 +33,25 @@ export async function POST() {
     return NextResponse.json({ ok: true, alreadyVerified: true });
   }
 
+  // 발송 가능 여부를 먼저 확인해서, 어차피 실패할 게 뻔한 발송을 위해
+  // 토큰을 만들고 속도 제한 카운트를 소모하지 않는다. 값(API 키/발신
+  // 주소) 자체는 클라이언트에 노출하지 않고, 명확한 오류 코드만 준다.
+  if (!isEmailServiceConfigured()) {
+    return NextResponse.json(
+      { error: "현재 인증 메일을 보낼 수 없습니다. 관리자 설정이 필요합니다.", code: "EMAIL_SERVICE_UNAVAILABLE" },
+      { status: 503 },
+    );
+  }
+
   const token = await createAuthToken("email_verify", user.id, user.email);
   const result = await sendVerificationEmail(user.email, token);
   if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: 502 });
+    // 아무도 받지 못한 채로 "사용 가능한" 인증 링크가 남지 않도록 즉시 폐기한다.
+    await invalidateAuthToken(token);
+    return NextResponse.json(
+      { error: "인증 메일을 보내지 못했어요. 잠시 후 다시 시도해주세요.", code: "SEND_FAILED" },
+      { status: 502 },
+    );
   }
   return NextResponse.json({ ok: true });
 }

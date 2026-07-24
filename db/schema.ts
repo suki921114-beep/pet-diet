@@ -120,6 +120,14 @@ export const households = sqliteTable(
   (table) => [uniqueIndex("households_invite_code_idx").on(table.inviteCode)],
 );
 
+// userEmail은 표시/레거시 호환용으로만 남겨두고, 권한 판단은 항상 userId로만
+// 한다(아래 _lib.ts의 requireHousehold* 헬퍼들 참고). userId는 컬럼 자체는
+// nullable이지만(운영 중인 테이블에 안전하게 ALTER TABLE로 추가하기 위해),
+// 애플리케이션은 userId가 없는 행을 "아직 연결되지 않은/유효하지 않은 멤버십"
+// 으로 취급해 어떤 권한 검사도 통과시키지 않는다 — 조용히 이메일로 폴백하지 않는다.
+// 유니크 인덱스는 "사용자 한 명은 항상 최대 하나의 가족에만 속한다" 정책을
+// DB 수준에서도 강제한다(SQLite UNIQUE 인덱스는 NULL끼리는 서로 다르다고
+// 취급하므로, 아직 연결되지 않은 여러 행이 있어도 막히지 않는다).
 export const householdMembers = sqliteTable(
   "household_members",
   {
@@ -129,11 +137,38 @@ export const householdMembers = sqliteTable(
     displayName: text("display_name"),
     role: text("role").notNull().default("member"), // "owner" | "member"
     joinedAt: text("joined_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    userId: text("user_id"),
   },
   (table) => [
     uniqueIndex("household_members_household_email_idx").on(
       table.householdId,
       table.userEmail,
     ),
+    uniqueIndex("household_members_user_id_idx").on(table.userId),
+  ],
+);
+
+// 이메일 기반 초대. role은 이번 단계에서 항상 "member"로 고정한다(owner
+// 초대는 소유권 이전으로만 가능). 원본 토큰은 절대 저장하지 않고 해시만
+// 저장한다.
+export const householdInvitations = sqliteTable(
+  "household_invitations",
+  {
+    id: text("id").primaryKey(),
+    householdId: text("household_id").notNull(),
+    invitedByUserId: text("invited_by_user_id").notNull(),
+    email: text("email").notNull(), // 정규화(trim+lowercase)된 초대 대상 이메일
+    role: text("role").notNull().default("member"),
+    tokenHash: text("token_hash").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    expiresAt: text("expires_at").notNull(),
+    sentAt: text("sent_at"), // 이메일 발송에 실제로 성공한 시각(성공 전에는 수락 불가)
+    acceptedAt: text("accepted_at"),
+    cancelledAt: text("cancelled_at"), // 취소되거나(재발송 등으로), 발송 실패로 무효화된 경우
+  },
+  (table) => [
+    uniqueIndex("household_invitations_token_hash_idx").on(table.tokenHash),
+    index("household_invitations_household_idx").on(table.householdId),
+    index("household_invitations_email_idx").on(table.email),
   ],
 );

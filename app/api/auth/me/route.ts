@@ -4,6 +4,7 @@ import { getReadyDb } from "@/db";
 import { authAccounts, users } from "@/db/schema";
 import { getSessionUser, hasPassword } from "@/lib/auth";
 import { getConsentStatus } from "@/lib/consent";
+import { isEmailServiceConfigured } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -34,5 +35,8 @@ export async function GET() {
     hasPassword: hasPassword(row?.passwordHash ?? ""),
     providers: accounts.map((a) => a.provider),
     consent,
+    // 값(API 키/발신 주소) 자체는 노출하지 않고 "보낼 수 있는 상태인지"만
+    // 알려준다 — 설정 화면이 발송 버튼을 미리 숨기거나 비활성화하는 데 쓴다.
+    emailServiceAvailable: isEmailServiceConfigured(),
   });
 }

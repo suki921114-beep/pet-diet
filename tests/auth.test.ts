@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { testDbUrl } from "./testDbUrl";
 
-// 실제 Turso 대신 프로세스 안에서만 존재하는 SQLite 메모리 DB를 쓴다.
+// 실제 Turso 대신 이 테스트 파일 전용의 임시 SQLite 파일을 쓴다(순수
+// in-memory는 트랜잭션 사용 시 격리 문제가 있어 testDbUrl.ts 참고).
 // getReadyDb()가 이 값을 읽는 시점은 테스트 안에서 처음 호출될 때(지연 평가)라서
 // 여기서 미리 지정해두면 충분하다.
-process.env.TURSO_DATABASE_URL = "file::memory:";
+process.env.TURSO_DATABASE_URL = testDbUrl();
 process.env.AUTH_SECRET = "test-only-secret-do-not-use-elsewhere";
 
 // lib/auth.ts가 가져다 쓰는 next/headers의 cookies()는 실제 요청 컨텍스트

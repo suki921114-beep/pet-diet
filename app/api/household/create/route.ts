@@ -1,15 +1,15 @@
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { households, householdMembers } from "@/db/schema";
-import { db, findMembership, generateInviteCode, requireApiUser } from "../_lib";
+import { db, generateInviteCode, getMembershipByUserId, requireSessionUser } from "../_lib";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const { user, response } = await requireApiUser();
+  const { user, response } = await requireSessionUser();
   if (!user) return response;
 
-  const existing = await findMembership(user.email);
+  const existing = await getMembershipByUserId(user.id);
   if (existing) {
     return NextResponse.json(
       { error: "이미 가족에 속해있어요. 먼저 기존 가족에서 나가주세요." },
@@ -59,13 +59,17 @@ export async function POST(request: Request) {
     displayName: user.displayName,
     role: "owner",
     joinedAt: now,
+    userId: user.id,
   });
 
+  // inviteCode는 households 테이블의 NOT NULL 컬럼이라 내부적으로는 계속
+  // 채워 넣지만(레거시 데이터/스키마 호환), 6자리 코드 참여 방식 자체가
+  // 폐기됐으므로 클라이언트 응답에는 더 이상 포함하지 않는다(me/route.ts와
+  // 동일하게 맞춤 — 화면 어디에도 죽은 코드를 보여주지 않기 위함).
   return NextResponse.json({
     household: {
       id: householdId,
       name: body.name?.trim() || "우리 가족",
-      inviteCode,
       dataVersion: 1,
       updatedAt: now,
       role: "owner",

@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { getReadyDb } from "@/db";
 import { authAccounts, users } from "@/db/schema";
 import { createSession, hashPassword, sessionCookieOptions, SESSION_COOKIE_NAME } from "@/lib/auth";
-import { createAuthToken } from "@/lib/authTokens";
+import { createAuthToken, invalidateAuthToken } from "@/lib/authTokens";
 import { recordSignupConsent } from "@/lib/consent";
 import { sendVerificationEmail } from "@/lib/email";
 import { checkRateLimit, clientIpFrom, rateLimitMessage } from "@/lib/rateLimit";
@@ -63,6 +63,12 @@ export async function POST(request: Request) {
   // 서비스 미설정) 계정은 그대로 만들어지고, 클라이언트에 그 사실만 알려준다.
   const verifyToken = await createAuthToken("email_verify", id, email);
   const emailResult = await sendVerificationEmail(email, verifyToken);
+  if (!emailResult.ok) {
+    // 계정 생성은 그대로 진행하되, 아무도 받지 못한 인증 링크가 유효한 채로
+    // 남지 않도록 즉시 폐기한다. 사용자는 나중에 "인증 메일 다시 보내기"로
+    // 새 토큰을 발급받을 수 있다.
+    await invalidateAuthToken(verifyToken);
+  }
 
   const rawSessionToken = await createSession(id);
   const response = NextResponse.json({

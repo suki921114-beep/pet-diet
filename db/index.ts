@@ -76,9 +76,26 @@ export async function getReadyDb() {
           user_email text NOT NULL,
           display_name text,
           role text DEFAULT 'member' NOT NULL,
-          joined_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+          joined_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          user_id text
         )`,
         `CREATE UNIQUE INDEX IF NOT EXISTS household_members_household_email_idx ON household_members (household_id, user_email)`,
+        `CREATE TABLE IF NOT EXISTS household_invitations (
+          id text PRIMARY KEY NOT NULL,
+          household_id text NOT NULL,
+          invited_by_user_id text NOT NULL,
+          email text NOT NULL,
+          role text DEFAULT 'member' NOT NULL,
+          token_hash text NOT NULL,
+          created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          expires_at text NOT NULL,
+          sent_at text,
+          accepted_at text,
+          cancelled_at text
+        )`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS household_invitations_token_hash_idx ON household_invitations (token_hash)`,
+        `CREATE INDEX IF NOT EXISTS household_invitations_household_idx ON household_invitations (household_id)`,
+        `CREATE INDEX IF NOT EXISTS household_invitations_email_idx ON household_invitations (email)`,
         `CREATE TABLE IF NOT EXISTS auth_accounts (
           id text PRIMARY KEY NOT NULL,
           user_id text NOT NULL,
@@ -129,6 +146,16 @@ export async function getReadyDb() {
     // 사용해 하위 호환을 유지한다(NOT NULL 제약을 바꾸는 테이블 재구축은 하지 않음).
     await addColumnIfMissing(c, `ALTER TABLE users ADD COLUMN email_verified_at text`);
     await addColumnIfMissing(c, `ALTER TABLE users ADD COLUMN deleted_at text`);
+    // household_members에 user_id 컬럼을 안전하게 추가한다(이미 있으면
+    // addColumnIfMissing이 조용히 건너뜀). 유니크 인덱스는 컬럼이 반드시
+    // 존재해야 만들 수 있으므로 컬럼 추가 다음에 실행한다. SQLite UNIQUE
+    // 인덱스는 NULL을 서로 다른 값으로 취급해서, 아직 연결 안 된(=NULL)
+    // 행이 여러 개 있어도 이 인덱스 생성 자체는 실패하지 않는다.
+    await addColumnIfMissing(c, `ALTER TABLE household_members ADD COLUMN user_id text`);
+    await c.execute(
+      `CREATE UNIQUE INDEX IF NOT EXISTS household_members_user_id_idx ON household_members (user_id)`,
+    );
+    await backfillHouseholdMemberUserIds(c);
   })().catch((error) => {
     // 다음 요청에서 다시 시도할 수 있도록 실패는 캐시하지 않는다.
     schemaReady = null;
@@ -136,4 +163,51 @@ export async function getReadyDb() {
   });
   await schemaReady;
   return drizzle(c, { schema });
+}
+
+// 레거시 마이그레이션: user_id가 비어있는 household_members 행을, 정규화된
+// (trim+lowercase) 이메일이 일치하는 users 행에 연결한다. 일치하는 사용자가
+// 없거나 이미 탈퇴(anonymize)된 계정이면 조용히 넘어가지 않고 연결하지 않은
+// 채로 두며, 그 개수를 경고 로그로 남긴다 — 임의로 삭제/병합하지 않는다.
+// 연결되지 않은 행은 이후 모든 권한 검사(requireHousehold*)에서 "유효하지
+// 않은 멤버십"으로 취급되어 아무 권한도 얻지 못한다.
+async function backfillHouseholdMemberUserIds(c: Client) {
+  const pending = await c.execute(
+    `SELECT id, user_email FROM household_members WHERE user_id IS NULL`,
+  );
+  if (pending.rows.length === 0) return;
+
+  let linked = 0;
+  for (const row of pending.rows) {
+    const memberId = row.id as string;
+    const email = String(row.user_email ?? "").trim().toLowerCase();
+    if (!email) continue;
+    const match = await c.execute({
+      sql: `SELECT id FROM users WHERE lower(trim(email)) = ? AND deleted_at IS NULL LIMIT 2`,
+      args: [email],
+    });
+    if (match.rows.length !== 1) continue; // 매칭 없음 또는 모호함 — 연결하지 않음
+    const userId = match.rows[0]?.id as string;
+    const result = await c.execute({
+      sql: `UPDATE household_members SET user_id = ? WHERE id = ? AND user_id IS NULL`,
+      args: [userId, memberId],
+    });
+    if (result.rowsAffected === 1) linked += 1;
+  }
+
+  const unlinked = pending.rows.length - linked;
+  if (unlinked > 0) {
+    console.warn(
+      `[db] household_members 마이그레이션: ${pending.rows.length}건 중 ${linked}건 연결, ${unlinked}건 미연결(이메일 불일치 또는 탈퇴 계정). 미연결 행은 가족 권한 검사에서 계속 제외됩니다.`,
+    );
+  }
+}
+
+// 테스트 전용: getReadyDb()는 schemaReady를 프로세스 생애주기 동안 한 번만
+// 실행하도록 캐시하므로, 이미 부팅된 뒤에는 다시 호출해도 백필이 재실행되지
+// 않는다. 마이그레이션 로직 자체("기존 미연결 행을 나중에 다시 돌려도
+// 안전한지")를 검증하려면 이 함수로 직접 재실행할 수 있어야 한다. 프로덕션
+// 코드 경로에서는 쓰이지 않는다.
+export async function runHouseholdMemberBackfillForTests() {
+  await backfillHouseholdMemberUserIds(getClient());
 }

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { testDbUrl } from "./testDbUrl";
 
-process.env.TURSO_DATABASE_URL = "file::memory:";
+process.env.TURSO_DATABASE_URL = testDbUrl();
 process.env.AUTH_SECRET = "test-only-secret-do-not-use-elsewhere";
 
 vi.mock("next/headers", () => ({
@@ -13,14 +14,24 @@ import { cookies } from "next/headers";
 import { getReadyDb } from "../db";
 import { authAccounts, authSessions, households, householdMembers, userConsents, users } from "../db/schema";
 import { POST as deleteAccountPOST } from "../app/api/auth/delete-account/route";
-import { createSession, hashPassword, hashToken, SESSION_COOKIE_NAME } from "../lib/auth";
+import {
+  createReauthToken,
+  createSession,
+  hashPassword,
+  hashToken,
+  REAUTH_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+} from "../lib/auth";
 import { getConsentStatus, recordConsent, recordSignupConsent } from "../lib/consent";
 import { PRIVACY_VERSION, TERMS_VERSION } from "../lib/legal";
 
-function mockCookie(value: string | undefined) {
+function mockCookie(sessionToken: string | undefined, reauthToken?: string) {
   vi.mocked(cookies).mockResolvedValue({
-    get: (name: string) =>
-      name === SESSION_COOKIE_NAME && value !== undefined ? { value } : undefined,
+    get: (name: string) => {
+      if (name === SESSION_COOKIE_NAME && sessionToken !== undefined) return { value: sessionToken };
+      if (name === REAUTH_COOKIE_NAME && reauthToken !== undefined) return { value: reauthToken };
+      return undefined;
+    },
   } as unknown as Awaited<ReturnType<typeof cookies>>);
 }
 
@@ -124,21 +135,35 @@ describe("계정 탈퇴 API — 비밀번호 계정", () => {
 });
 
 describe("계정 탈퇴 API — Google 전용(비밀번호 없음) 계정", () => {
-  it("확인 이메일이 다르면 탈퇴되지 않는다", async () => {
-    const { id } = await createTestUser(""); // 비밀번호 없음
+  it("이메일 재입력만으로는 탈퇴할 수 없다(이메일은 비밀정보가 아님)", async () => {
+    const { id, email } = await createTestUser(""); // 비밀번호 없음
     const rawToken = await createSession(id);
-    mockCookie(rawToken);
+    mockCookie(rawToken); // reauth 쿠키 없음
 
-    const res = await deleteAccountPOST(deleteRequest({ confirmEmail: "not-my-email@example.com" }));
+    const res = await deleteAccountPOST(deleteRequest({ confirmEmail: email }));
+    expect(res.status).toBe(401);
+
+    const db = await getReadyDb();
+    const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    expect(row?.deletedAt).toBeNull();
+  });
+
+  it("유효한 Google 재인증(pdm_reauth) 없이는 탈퇴되지 않는다", async () => {
+    const { id } = await createTestUser("");
+    const rawToken = await createSession(id);
+    mockCookie(rawToken, "not-a-valid-reauth-token");
+
+    const res = await deleteAccountPOST(deleteRequest({}));
     expect(res.status).toBe(401);
   });
 
-  it("본인 이메일을 정확히 입력하면(대소문자 무시) 탈퇴된다", async () => {
-    const { id, email } = await createTestUser("");
+  it("최근 Google 재인증(pdm_reauth)이 있으면 탈퇴된다", async () => {
+    const { id } = await createTestUser("");
     const rawToken = await createSession(id);
-    mockCookie(rawToken);
+    const reauthToken = createReauthToken(id);
+    mockCookie(rawToken, reauthToken);
 
-    const res = await deleteAccountPOST(deleteRequest({ confirmEmail: email.toUpperCase() }));
+    const res = await deleteAccountPOST(deleteRequest({}));
     expect(res.status).toBe(200);
 
     const db = await getReadyDb();
@@ -165,6 +190,7 @@ describe("계정 탈퇴 시 가족 공유 자동 정리", () => {
       householdId,
       userEmail: email,
       role: "owner",
+      userId: id,
     });
 
     const res = await deleteAccountPOST(deleteRequest({ password: "household-owner-pw" }));

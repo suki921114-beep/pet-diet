@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { getReadyDb } from "@/db";
 import { authAccounts, users } from "@/db/schema";
 import {
+  createReauthToken,
   createSession,
   getSessionUser,
+  reauthCookieOptions,
   REAUTH_COOKIE_NAME,
   sessionCookieOptions,
   SESSION_COOKIE_NAME,
@@ -24,7 +26,7 @@ type Handshake = {
   codeVerifier: string;
   state: string;
   nonce: string;
-  mode: "signin" | "link";
+  mode: "signin" | "link" | "reauth";
   next: string;
   linkUserId: string | null;
   redirectUri: string;
@@ -101,9 +103,51 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // Google이 이 이메일을 인증했다고 확인했고(위쪽 emailVerified 체크),
+    // 이 콜백의 사용자가 연결을 시작한 바로 그 세션이며(위쪽 reauth 체크),
+    // Google 이메일이 이 계정의 현재 이메일과 정규화 기준으로 정확히
+    // 일치할 때만 앱의 이메일 인증 상태를 갱신한다. 이메일이 다르면(예:
+    // 다른 개인 Gmail을 로그인 수단으로만 연결한 경우) 조용히 건드리지
+    // 않는다 — 클라이언트가 이 판단을 대신하게 두지 않는다.
+    const normalizedCurrentEmail = currentUser.email.trim().toLowerCase();
+    if (normalizedEmail === normalizedCurrentEmail) {
+      await database
+        .update(users)
+        .set({ emailVerifiedAt: new Date().toISOString() })
+        .where(and(eq(users.id, currentUser.id), isNull(users.emailVerifiedAt)));
+    }
+
     const response = NextResponse.redirect(new URL("/?googleLinked=1", request.url));
     response.cookies.set(OAUTH_COOKIE_NAME, "", { path: "/", maxAge: 0 });
     response.cookies.set(REAUTH_COOKIE_NAME, "", { path: "/", maxAge: 0 });
+    return response;
+  }
+
+  if (handshake.mode === "reauth") {
+    const currentUser = await getSessionUser();
+    if (!currentUser || currentUser.id !== handshake.linkUserId) {
+      return errorRedirect(request, "reauth_required");
+    }
+    // 아무 Google 계정이나 방금 로그인했다고 재인증으로 인정하지 않는다 —
+    // 반드시 "이미 이 사용자 계정에 연결된 바로 그 Google 계정"이어야 한다.
+    const [linkedAccount] = await database
+      .select({ id: authAccounts.id })
+      .from(authAccounts)
+      .where(
+        and(
+          eq(authAccounts.userId, currentUser.id),
+          eq(authAccounts.provider, "google"),
+          eq(authAccounts.providerSubject, identity.sub),
+        ),
+      )
+      .limit(1);
+    if (!linkedAccount) {
+      return errorRedirect(request, "reauth_account_mismatch");
+    }
+
+    const response = NextResponse.redirect(new URL(safeInternalPath(handshake.next), request.url));
+    response.cookies.set(OAUTH_COOKIE_NAME, "", { path: "/", maxAge: 0 });
+    response.cookies.set(REAUTH_COOKIE_NAME, createReauthToken(currentUser.id), reauthCookieOptions());
     return response;
   }
 

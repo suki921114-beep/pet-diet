@@ -417,6 +417,23 @@ textarea:focus-visible {
   color: #fff;
 }
 
+.button.outline {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+
+.button.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+.button.danger-outline {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  color: var(--danger);
+}
+
 .button.small {
   min-height: 44px;
   padding: 7px 12px;
@@ -837,6 +854,19 @@ textarea::placeholder {
   border-bottom: 0;
 }
 
+/* 가족 구성원/초대 목록처럼 화살표 대신 버튼 1~2개를 오른쪽에 붙이는 행.
+   기본 .menu-row의 3번째 칸(22px, 화살표용)은 텍스트 버튼이 들어가기엔
+   너무 좁아서 auto로 넓혀준다. */
+.menu-row.with-actions {
+  grid-template-columns: 46px 1fr auto;
+}
+
+.menu-row-actions {
+  display: flex;
+  gap: 8px;
+  justify-self: end;
+}
+
 .menu-row:hover,
 .stack-row:hover {
   background: var(--surface-soft);
@@ -975,6 +1005,14 @@ textarea::placeholder {
   margin: 0 0 2px;
   font-size: 16px;
   letter-spacing: -0.025em;
+}
+
+.form-section h3 {
+  margin: 10px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--muted);
 }
 
 label {
@@ -1567,6 +1605,36 @@ input[type="range"] {
   gap: 9px;
 }
 
+.pet-switch-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pet-switch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 690;
+}
+
+.pet-switch-chip.active {
+  border-color: var(--terracotta);
+  background: var(--terracotta-soft);
+  color: var(--terracotta);
+}
+
+.pet-switch-chip:focus-visible {
+  outline: 2px solid var(--terracotta);
+  outline-offset: 2px;
+}
+
 .tab-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1598,6 +1666,77 @@ input[type="range"] {
 
 .danger-zone {
   border-color: #efc6c1;
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+}
+
+/* 설정 화면의 "한 줄 설정행" 목록(내 계정 등). Google/Linear/Notion류
+   설정 화면처럼 왼쪽엔 설명, 오른쪽엔 상태 배지+액션을 둔다. */
+.settings-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
+}
+
+@media (min-width: 640px) {
+  .settings-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.settings-row-label {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-row-label strong {
+  font-size: 14px;
+}
+
+.settings-row-label small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-badge.positive {
+  background: var(--success-soft);
+  color: #3c6143;
+}
+
+.status-badge.warning {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .stats-mode {

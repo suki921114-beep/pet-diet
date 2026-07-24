@@ -22,7 +22,10 @@ export async function POST() {
     .limit(1);
   if (!otherMethod) {
     return NextResponse.json(
-      { error: "다른 로그인 수단이 없어서 Google 연결을 해제할 수 없어요. 먼저 비밀번호를 설정해주세요." },
+      {
+        error: "유일한 로그인 수단은 연결 해제할 수 없습니다. 먼저 비밀번호를 설정해주세요.",
+        code: "LAST_LOGIN_METHOD",
+      },
       { status: 400 },
     );
   }

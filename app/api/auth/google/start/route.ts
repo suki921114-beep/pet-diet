@@ -13,7 +13,7 @@ type Handshake = {
   codeVerifier: string;
   state: string;
   nonce: string;
-  mode: "signin" | "link";
+  mode: "signin" | "link" | "reauth";
   next: string;
   linkUserId: string | null;
   redirectUri: string;
@@ -30,7 +30,9 @@ export async function GET(request: NextRequest) {
   }
 
   const url = new URL(request.url);
-  const mode: "signin" | "link" = url.searchParams.get("mode") === "link" ? "link" : "signin";
+  const rawMode = url.searchParams.get("mode");
+  const mode: "signin" | "link" | "reauth" =
+    rawMode === "link" ? "link" : rawMode === "reauth" ? "reauth" : "signin";
   const next = safeInternalPath(url.searchParams.get("next"));
   // 회원가입 탭에서 약관 체크박스를 켠 채로 눌렀을 때만 "1"로 전달된다.
   // 콜백에서 신규 계정을 만드는 순간에만 이 값을 확인한다(로그인/연결에는 불필요).
@@ -47,6 +49,16 @@ export async function GET(request: NextRequest) {
     const reauthCookie = request.cookies.get(REAUTH_COOKIE_NAME)?.value;
     if (!reauthCookie || !verifyReauthToken(reauthCookie, user.id)) {
       return NextResponse.redirect(new URL("/?authError=reauth_required", request.url));
+    }
+    linkUserId = user.id;
+  } else if (mode === "reauth") {
+    // 비밀번호가 없는(Google 전용) 계정이 소유권 이전이나 계정 탈퇴처럼
+    // 민감한 작업 전에 "방금 나 자신임을 다시 증명"하는 용도. 로그인만
+    // 돼 있으면 시작할 수 있고, 콜백에서 "이미 이 계정에 연결된 바로 그
+    // Google 계정"으로 로그인했는지까지 다시 확인한다.
+    const user = await getSessionUser();
+    if (!user) {
+      return NextResponse.redirect(new URL("/?authError=login_required", request.url));
     }
     linkUserId = user.id;
   }

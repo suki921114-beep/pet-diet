@@ -12,13 +12,10 @@ import {
   ChevronRight,
   ClipboardList,
   Cookie,
-  Copy,
   Download,
   Edit3,
   HeartPulse,
   Home,
-  KeyRound,
-  LogOut,
   Mail,
   PackageCheck,
   PawPrint,
@@ -39,6 +36,7 @@ import {
 import {
   FormEvent,
   ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -50,6 +48,7 @@ type Page =
   | "menu"
   | "pet"
   | "pet-edit"
+  | "pet-add"
   | "natural"
   | "dry"
   | "snacks"
@@ -72,6 +71,7 @@ type IngredientLine = {
 };
 
 export type Pet = {
+  id: string;
   name: string;
   birthdate: string;
   sex: "male" | "female" | "male-neutered" | "female-neutered";
@@ -93,6 +93,7 @@ export type Pet = {
 
 export type Batch = {
   id: string;
+  petId: string;
   name: string;
   dateMade: string;
   expiry: string;
@@ -107,6 +108,7 @@ export type Batch = {
 
 export type DryFood = {
   id: string;
+  petId: string;
   name: string;
   totalWeight: number;
   usedWeight: number;
@@ -122,6 +124,7 @@ export type DryFood = {
 
 export type Snack = {
   id: string;
+  petId: string;
   name: string;
   totalWeight: number;
   usedWeight: number;
@@ -133,6 +136,7 @@ export type Snack = {
 
 export type Medication = {
   id: string;
+  petId: string;
   type: "med" | "supplement";
   name: string;
   prescribedDate: string;
@@ -146,6 +150,7 @@ export type Medication = {
 
 export type FeedRecord = {
   id: string;
+  petId: string;
   datetime: string;
   label: string;
   source: "plan" | "batch" | "dry" | "custom" | "snack";
@@ -169,6 +174,7 @@ export type FeedRecord = {
 
 export type MedicationLog = {
   id: string;
+  petId: string;
   medicationId: string;
   datetime: string;
   stockUsed: number;
@@ -176,6 +182,7 @@ export type MedicationLog = {
 
 export type HealthRecord = {
   id: string;
+  petId: string;
   datetime: string;
   weightKg: number | null;
   bcs: number | null;
@@ -202,7 +209,29 @@ export type DailyPlan = {
   appliedAt: string;
 };
 
+// 4단계(다견 지원): 실제로 저장·동기화되는 형태는 항상 이 멀티펫 구조다.
+// dailyPlans는 날짜만으로는 반려동물을 구분할 수 없으므로 `${petId}:${date}`
+// 복합 키로 저장한다(예: "pet-abc123:2026-07-24").
 export type Database = {
+  schemaVersion: number;
+  pets: Pet[];
+  batches: Batch[];
+  dryFoods: DryFood[];
+  snacks: Snack[];
+  medications: Medication[];
+  feedLog: FeedRecord[];
+  medLog: MedicationLog[];
+  healthLog: HealthRecord[];
+  dailyPlans: Record<string, DailyPlan>;
+};
+
+// 대부분의 화면(오늘/기록/건강/통계/자연식/사료/간식/약)은 "지금 선택된
+// 반려동물" 하나만 알면 된다. 그래서 기존 컴포넌트들이 원래 쓰던 모양
+// (pet 단수 + 이 반려동물의 기록만 담긴 배열, dailyPlans는 date로만 키)을
+// 그대로 유지하는 파생 뷰 타입을 따로 둔다. 실제 저장·동기화 대상은 항상
+// 위의 멀티펫 Database이고, 이 타입은 최상위 컴포넌트가 활성 반려동물
+// 기준으로 파생시켜 화면에 내려줄 때만 쓴다.
+export type PetView = {
   schemaVersion: number;
   pet: Pet;
   batches: Batch[];
@@ -218,6 +247,7 @@ export type Database = {
 // 가족 공유(household) 관련 타입. 실제 데이터는 서버(D1)의 households.data에
 // Database 통째로 저장되고, 이 클라이언트는 주기적으로 가져오고(pull) 저장(push)한다.
 type HouseholdMember = {
+  userId: string | null;
   email: string;
   displayName: string | null;
   role: "owner" | "member";
@@ -227,7 +257,6 @@ type HouseholdMember = {
 type HouseholdInfo = {
   id: string;
   name: string;
-  inviteCode: string;
   dataVersion: number;
   updatedAt: string;
   updatedByEmail?: string | null;
@@ -235,10 +264,25 @@ type HouseholdInfo = {
   members: HouseholdMember[];
 };
 
+// household_invitations 한 건을 화면에 보여주기 위한 형태(토큰 원본/해시는
+// 서버가 애초에 응답에 포함하지 않는다).
+type HouseholdInvitation = {
+  id: string;
+  email: string;
+  role: "owner" | "member";
+  createdAt: string;
+  expiresAt: string;
+  status: "pending" | "sent_pending" | "expired" | "cancelled" | "accepted";
+};
+
 type AuthState = "checking" | "signed-out" | "signed-in";
 
 const STORAGE_KEY = "petDietManager";
 const LEGACY_KEY = "dogDietApp_v1";
+// 지금 선택된 반려동물은 기기별 UI 상태라 STORAGE_KEY(가족과 동기화되는
+// 본체 데이터)와는 별도의 키에 저장한다. 그래야 반려동물을 전환해도 다른
+// 가족 구성원의 화면이 강제로 전환되지 않는다.
+const ACTIVE_PET_KEY = "petDietManager_activePetId";
 
 // 재료 목록은 강아지 자연식에 흔히 쓰는 "원재료·단순조리" 항목만 골라뒀다.
 // (양파·마늘·초콜릿·포도 등 강아지에게 위험한 재료, 라면·김치·젓갈처럼
@@ -306,31 +350,41 @@ function fmt(value: number | null | undefined, digits = 0) {
   });
 }
 
+// 반려동물 한 마리의 빈 프로필. id는 호출할 때마다 새로 만들어지므로,
+// 이미 저장된 데이터를 다시 정규화할 때는 이 함수를 쓰지 않는다(그러면
+// 매번 새 id가 생겨 반려동물이 중복되는 문제가 생긴다). 정말 "새 반려동물"을
+// 만들 때만 쓴다.
+export function emptyPet(id: string = uid("pet")): Pet {
+  return {
+    id,
+    name: "",
+    birthdate: "",
+    sex: "female-neutered",
+    registrationNo: "",
+    weightKg: 0,
+    targetWeightKg: null,
+    activity: "normal",
+    condition: "none",
+    weightGoal: "maintain",
+    dailyTargetKcal: 0,
+    vetTargetKcal: null,
+    feedingsPerDay: 3,
+    fatLimitG: null,
+    naturalRatio: 100,
+    batchId: "",
+    dryFoodId: "",
+    photoDataUrl: null,
+  };
+}
+
 // 로그인 전/데이터가 없는 상태, 그리고 설정 화면의 "전체 초기화"는 예시(샘플)
 // 데이터가 아니라 반려동물 프로필까지 포함해 정말로 아무것도 없는 빈 상태여야
-// 한다. 그래서 빈 데이터를 만드는 함수를 하나만 둔다.
+// 한다. 그래서 빈 데이터를 만드는 함수를 하나만 둔다. 4단계(다견 지원)부터는
+// 빈 상태도 "반려동물 한 마리"로 시작한다(0마리 상태는 UI에서 만들지 않음).
 export function emptyDatabase(): Database {
   return {
-    schemaVersion: 3,
-    pet: {
-      name: "",
-      birthdate: "",
-      sex: "female-neutered",
-      registrationNo: "",
-      weightKg: 0,
-      targetWeightKg: null,
-      activity: "normal",
-      condition: "none",
-      weightGoal: "maintain",
-      dailyTargetKcal: 0,
-      vetTargetKcal: null,
-      feedingsPerDay: 3,
-      fatLimitG: null,
-      naturalRatio: 100,
-      batchId: "",
-      dryFoodId: "",
-      photoDataUrl: null,
-    },
+    schemaVersion: 4,
+    pets: [emptyPet()],
     batches: [],
     dryFoods: [],
     snacks: [],
@@ -339,6 +393,62 @@ export function emptyDatabase(): Database {
     medLog: [],
     healthLog: [],
     dailyPlans: {},
+  };
+}
+
+// updateDb 콜백 안에서 "지금 활성화된 반려동물"만 patch하고 나머지 반려동물은
+// 그대로 두기 위한 헬퍼. petId가 pets 배열에 없으면 아무 것도 바꾸지 않는다.
+function withPet(database: Database, petId: string, patch: (pet: Pet) => Pet): Database {
+  return {
+    ...database,
+    pets: database.pets.map((item) => (item.id === petId ? patch(item) : item)),
+  };
+}
+
+// db(항상 전체 멀티펫 데이터)에서 지금 선택된 반려동물 하나만 남긴 뷰를
+// 만든다. 기존 단일-반려동물 시절 컴포넌트들이 그대로 쓸 수 있도록
+// PetView 모양(pet 단수 + 이 반려동물의 기록만 담긴 배열)으로 파생시킨다.
+// 순수 함수로 분리해 두어야 petId별 격리 로직을 컴포넌트 없이도 검증할 수 있다.
+export function buildPetView(database: Database, petId: string): PetView {
+  const pet = database.pets.find((item) => item.id === petId) ?? database.pets[0] ?? emptyPet(petId || undefined);
+  const resolvedId = pet.id;
+  return {
+    schemaVersion: database.schemaVersion,
+    pet,
+    batches: database.batches.filter((item) => item.petId === resolvedId),
+    dryFoods: database.dryFoods.filter((item) => item.petId === resolvedId),
+    snacks: database.snacks.filter((item) => item.petId === resolvedId),
+    medications: database.medications.filter((item) => item.petId === resolvedId),
+    feedLog: database.feedLog.filter((item) => item.petId === resolvedId),
+    medLog: database.medLog.filter((item) => item.petId === resolvedId),
+    healthLog: database.healthLog.filter((item) => item.petId === resolvedId),
+    dailyPlans: Object.fromEntries(
+      Object.entries(database.dailyPlans)
+        .filter(([key]) => key.startsWith(`${resolvedId}:`))
+        .map(([key, plan]) => [key.slice(resolvedId.length + 1), plan]),
+    ),
+  };
+}
+
+// 반려동물 삭제: 마지막 한 마리는 차단하고(원본 그대로 반환), 그 반려동물이
+// 걸려있는 급여·재고·건강·계획 기록도 함께 지운다. 다른 반려동물의 기록은
+// 절대 건드리지 않는다.
+export function cascadeDeletePet(database: Database, petId: string): Database {
+  if (database.pets.length <= 1) return database;
+  const prefix = `${petId}:`;
+  return {
+    ...database,
+    pets: database.pets.filter((item) => item.id !== petId),
+    batches: database.batches.filter((item) => item.petId !== petId),
+    dryFoods: database.dryFoods.filter((item) => item.petId !== petId),
+    snacks: database.snacks.filter((item) => item.petId !== petId),
+    medications: database.medications.filter((item) => item.petId !== petId),
+    feedLog: database.feedLog.filter((item) => item.petId !== petId),
+    medLog: database.medLog.filter((item) => item.petId !== petId),
+    healthLog: database.healthLog.filter((item) => item.petId !== petId),
+    dailyPlans: Object.fromEntries(
+      Object.entries(database.dailyPlans).filter(([key]) => !key.startsWith(prefix)),
+    ),
   };
 }
 
@@ -358,108 +468,111 @@ export function nonNegative(value: number) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export function normalizeDatabase(raw: unknown): Database {
-  // 예시(사실상 실제 시드) 데이터가 아니라 빈 상태를 기준으로 정규화한다.
-  // 그래야 로그인 전이나 데이터가 없는 상태에서 "봄이" 샘플이 섞여 들어가지 않는다.
-  const base = emptyDatabase();
-  if (!raw || typeof raw !== "object") return base;
-  const source = raw as Record<string, unknown>;
-  const legacyDog = (source.dog ?? source.pet ?? {}) as Record<string, unknown>;
-  const pet: Pet = {
-    ...base.pet,
-    name: String(legacyDog.name ?? base.pet.name),
-    birthdate: String(legacyDog.birthdate ?? base.pet.birthdate),
-    weightKg: toNumber(legacyDog.weightKg, base.pet.weightKg),
-    targetWeightKg: legacyDog.idealWeightKg
-      ? toNumber(legacyDog.idealWeightKg)
-      : ((legacyDog.targetWeightKg as number | null) ?? null),
-    activity: (legacyDog.activity as Pet["activity"]) ?? base.pet.activity,
-    condition:
-      legacyDog.disease === "chronic" || legacyDog.disease === "acute"
-        ? (legacyDog.disease as Pet["condition"])
-        : ((legacyDog.condition as Pet["condition"]) ?? base.pet.condition),
-    weightGoal: (legacyDog.weightGoal as Pet["weightGoal"]) ?? base.pet.weightGoal,
-    dailyTargetKcal: toNumber(legacyDog.dailyTargetKcal, base.pet.dailyTargetKcal),
-    vetTargetKcal: legacyDog.vetTargetKcal ? toNumber(legacyDog.vetTargetKcal) : null,
-    feedingsPerDay: Math.max(1, toNumber(legacyDog.feedingsPerDay, base.pet.feedingsPerDay)),
-    fatLimitG: legacyDog.fatLimitG ? toNumber(legacyDog.fatLimitG) : null,
-    naturalRatio: toNumber(legacyDog.feedNatRatio ?? legacyDog.naturalRatio, base.pet.naturalRatio),
-    batchId: String(legacyDog.feedBatchId ?? legacyDog.batchId ?? base.pet.batchId),
-    dryFoodId: String(legacyDog.feedDryId ?? legacyDog.dryFoodId ?? base.pet.dryFoodId),
-    sex: (legacyDog.sex as Pet["sex"]) ?? base.pet.sex,
-    registrationNo: String(legacyDog.registrationNo ?? ""),
-    photoDataUrl: typeof legacyDog.photoDataUrl === "string" ? legacyDog.photoDataUrl : null,
-  };
+// v4(다견) 백업/동기화 데이터에 이미 들어있는 반려동물 배열을 정규화한다.
+// 각 반려동물의 id는 그대로 보존한다 — 여기서 새 id를 만들면 재정규화할
+// 때마다(예: 저장→불러오기 왕복) 반려동물이 중복 생성된다.
+function parsePets(rawPets: unknown): Pet[] {
+  if (!Array.isArray(rawPets) || rawPets.length === 0) return [emptyPet()];
+  return (rawPets as Record<string, unknown>[]).map((p) => ({
+    id: String(p.id ?? uid("pet")),
+    name: String(p.name ?? ""),
+    birthdate: String(p.birthdate ?? ""),
+    weightKg: toNumber(p.weightKg),
+    targetWeightKg: p.targetWeightKg ? toNumber(p.targetWeightKg) : null,
+    activity: (p.activity as Pet["activity"]) ?? "normal",
+    condition: (p.condition as Pet["condition"]) ?? "none",
+    weightGoal: (p.weightGoal as Pet["weightGoal"]) ?? "maintain",
+    dailyTargetKcal: toNumber(p.dailyTargetKcal),
+    vetTargetKcal: p.vetTargetKcal ? toNumber(p.vetTargetKcal) : null,
+    feedingsPerDay: Math.max(1, toNumber(p.feedingsPerDay, 3)),
+    fatLimitG: p.fatLimitG ? toNumber(p.fatLimitG) : null,
+    naturalRatio: toNumber(p.naturalRatio, 100),
+    batchId: String(p.batchId ?? ""),
+    dryFoodId: String(p.dryFoodId ?? ""),
+    sex: (p.sex as Pet["sex"]) ?? "female-neutered",
+    registrationNo: String(p.registrationNo ?? ""),
+    photoDataUrl: typeof p.photoDataUrl === "string" ? p.photoDataUrl : null,
+  }));
+}
 
-  const batches = Array.isArray(source.batches)
-    ? (source.batches as Record<string, unknown>[]).map((b) => ({
-        id: String(b.id ?? uid("batch")),
-        name: String(b.name ?? "자연식"),
-        dateMade: String(b.dateMade ?? ""),
-        expiry: String(b.expiry ?? ""),
-        totalWeight: toNumber(b.totalWeight),
-        usedWeight: toNumber(b.usedWeight),
-        kcalPer100: toNumber(b.kcalPer100),
-        proteinPer100: toNumber(b.proteinPer100),
-        fatPer100: toNumber(b.fatPer100),
-        carbPer100: toNumber(b.carbPer100),
-        recipe: Array.isArray(b.recipe) ? (b.recipe as IngredientLine[]) : [],
-      }))
-    : base.batches;
+function parseBatches(raw: unknown, fallbackPetId: string): Batch[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((b) => ({
+    id: String(b.id ?? uid("batch")),
+    petId: String(b.petId ?? fallbackPetId),
+    name: String(b.name ?? "자연식"),
+    dateMade: String(b.dateMade ?? ""),
+    expiry: String(b.expiry ?? ""),
+    totalWeight: toNumber(b.totalWeight),
+    usedWeight: toNumber(b.usedWeight),
+    kcalPer100: toNumber(b.kcalPer100),
+    proteinPer100: toNumber(b.proteinPer100),
+    fatPer100: toNumber(b.fatPer100),
+    carbPer100: toNumber(b.carbPer100),
+    recipe: Array.isArray(b.recipe) ? (b.recipe as IngredientLine[]) : [],
+  }));
+}
 
-  const dryFoods = Array.isArray(source.dryFoods)
-    ? (source.dryFoods as Record<string, unknown>[]).map((d) => ({
-        id: String(d.id ?? uid("dry")),
-        name: String(d.name ?? "건식사료"),
-        totalWeight: toNumber(d.totalWeight),
-        usedWeight: toNumber(d.usedWeight),
-        kcalPer100: toNumber(d.kcalPer100),
-        protein: toNumber(d.protein),
-        fat: toNumber(d.fat),
-        fiber: toNumber(d.fiber),
-        ash: toNumber(d.ash),
-        calcium: toNumber(d.calcium),
-        phosphorus: toNumber(d.phosphorus),
-        moisture: toNumber(d.moisture),
-      }))
-    : base.dryFoods;
+function parseDryFoods(raw: unknown, fallbackPetId: string): DryFood[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((d) => ({
+    id: String(d.id ?? uid("dry")),
+    petId: String(d.petId ?? fallbackPetId),
+    name: String(d.name ?? "건식사료"),
+    totalWeight: toNumber(d.totalWeight),
+    usedWeight: toNumber(d.usedWeight),
+    kcalPer100: toNumber(d.kcalPer100),
+    protein: toNumber(d.protein),
+    fat: toNumber(d.fat),
+    fiber: toNumber(d.fiber),
+    ash: toNumber(d.ash),
+    calcium: toNumber(d.calcium),
+    phosphorus: toNumber(d.phosphorus),
+    moisture: toNumber(d.moisture),
+  }));
+}
 
-  const snacks: Snack[] = Array.isArray(source.snacks)
-    ? (source.snacks as Record<string, unknown>[]).map((s) => ({
-        id: String(s.id ?? uid("snack")),
-        name: String(s.name ?? "간식"),
-        totalWeight: toNumber(s.totalWeight),
-        usedWeight: toNumber(s.usedWeight),
-        kcalPer100: toNumber(s.kcalPer100),
-        protein: toNumber(s.protein),
-        fat: toNumber(s.fat),
-        carb: toNumber(s.carb),
-      }))
-    : base.snacks;
+function parseSnacks(raw: unknown, fallbackPetId: string): Snack[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((s) => ({
+    id: String(s.id ?? uid("snack")),
+    petId: String(s.petId ?? fallbackPetId),
+    name: String(s.name ?? "간식"),
+    totalWeight: toNumber(s.totalWeight),
+    usedWeight: toNumber(s.usedWeight),
+    kcalPer100: toNumber(s.kcalPer100),
+    protein: toNumber(s.protein),
+    fat: toNumber(s.fat),
+    carb: toNumber(s.carb),
+  }));
+}
 
-  const legacyMeds = (source.medications ?? source.meds) as Record<string, unknown>[] | undefined;
-  const medications: Medication[] = Array.isArray(legacyMeds)
-    ? legacyMeds.map((m) => ({
-        id: String(m.id ?? uid("med")),
-        type: (m.type === "med" ? "med" : "supplement") as Medication["type"],
-        name: String(m.name ?? "약/영양제"),
-        prescribedDate: String(m.prescribedDate ?? ""),
-        dose: String(m.dose ?? ""),
-        perDay: Math.max(1, toNumber(m.perDay, 1)),
-        stock: toNumber(m.stock),
-        stockUnit: String(m.stockUnit ?? "회분"),
-        // 1회당 차감량은 등록·수정·급여 완료 어디서든 0 이하가 될 수 없다.
-        // 예전 백업 데이터에 0·음수·빈 값이 남아있어도 여기서 안전한 기본값(1)로 대체한다.
-        stockPerDose: toNumber(m.stockPerDose) > 0 ? toNumber(m.stockPerDose) : 1,
-        memo: String(m.memo ?? ""),
-      }))
-    : base.medications;
+function parseMedications(raw: unknown, fallbackPetId: string): Medication[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((m) => ({
+    id: String(m.id ?? uid("med")),
+    petId: String(m.petId ?? fallbackPetId),
+    type: (m.type === "med" ? "med" : "supplement") as Medication["type"],
+    name: String(m.name ?? "약/영양제"),
+    prescribedDate: String(m.prescribedDate ?? ""),
+    dose: String(m.dose ?? ""),
+    perDay: Math.max(1, toNumber(m.perDay, 1)),
+    stock: toNumber(m.stock),
+    stockUnit: String(m.stockUnit ?? "회분"),
+    // 1회당 차감량은 등록·수정·급여 완료 어디서든 0 이하가 될 수 없다.
+    // 예전 백업 데이터에 0·음수·빈 값이 남아있어도 여기서 안전한 기본값(1)로 대체한다.
+    stockPerDose: toNumber(m.stockPerDose) > 0 ? toNumber(m.stockPerDose) : 1,
+    memo: String(m.memo ?? ""),
+  }));
+}
 
-  const legacyFeeds = Array.isArray(source.feedLog) ? (source.feedLog as Record<string, unknown>[]) : [];
-  const feedLog: FeedRecord[] = legacyFeeds.map((f) => {
+function parseFeedLog(raw: unknown, fallbackPetId: string): FeedRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((f) => {
     const grams = toNumber(f.grams);
     return {
       id: String(f.id ?? uid("feed")),
+      petId: String(f.petId ?? fallbackPetId),
       datetime: String(f.datetime ?? `${localDate()}T${localTime()}`),
       label: String(f.label ?? "급여 기록"),
       source:
@@ -488,44 +601,128 @@ export function normalizeDatabase(raw: unknown): Database {
       dryKcalPer100: toNumber(f.dryKcalPer100),
     };
   });
+}
 
-  const rawHealth = (source.healthLog ?? source.symptomLog) as Record<string, unknown>[] | undefined;
-  const healthLog: HealthRecord[] = Array.isArray(rawHealth)
-    ? rawHealth.map((h) => ({
-        id: String(h.id ?? uid("health")),
-        datetime: String(h.datetime ?? `${localDate()}T${localTime()}`),
-        weightKg: h.weightKg ? toNumber(h.weightKg) : null,
-        bcs: h.bcs ? toNumber(h.bcs) : null,
-        appetite: (h.appetite as HealthRecord["appetite"]) ?? "normal",
-        vomitCount: toNumber(h.vomitCount),
-        stool: h.stool ? toNumber(h.stool) : null,
-        vitality: (h.vitality as HealthRecord["vitality"]) ?? "normal",
-        pain: Boolean(h.pain),
-        note: String(h.note ?? ""),
-      }))
-    : [];
+function parseMedLog(raw: unknown, fallbackPetId: string): MedicationLog[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((m) => ({
+    id: String(m.id ?? uid("medlog")),
+    petId: String(m.petId ?? fallbackPetId),
+    medicationId: String(m.medicationId ?? m.medId ?? ""),
+    datetime: String(m.datetime ?? `${localDate()}T${localTime()}`),
+    stockUsed: toNumber(m.stockUsed, 0),
+  }));
+}
+
+function parseHealthLog(raw: unknown, fallbackPetId: string): HealthRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((h) => ({
+    id: String(h.id ?? uid("health")),
+    petId: String(h.petId ?? fallbackPetId),
+    datetime: String(h.datetime ?? `${localDate()}T${localTime()}`),
+    weightKg: h.weightKg ? toNumber(h.weightKg) : null,
+    bcs: h.bcs ? toNumber(h.bcs) : null,
+    appetite: (h.appetite as HealthRecord["appetite"]) ?? "normal",
+    vomitCount: toNumber(h.vomitCount),
+    stool: h.stool ? toNumber(h.stool) : null,
+    vitality: (h.vitality as HealthRecord["vitality"]) ?? "normal",
+    pain: Boolean(h.pain),
+    note: String(h.note ?? ""),
+  }));
+}
+
+// dailyPlans는 날짜만으로는 반려동물을 구분할 수 없어 `${petId}:${date}`
+// 복합 키로 저장한다. 이미 v4(복합 키) 데이터면 그대로 두고, v3 이하(날짜만
+// 키였던) 데이터면 fallbackPetId를 붙여 옮긴다.
+function parseDailyPlans(
+  raw: unknown,
+  fallbackPetId: string,
+  alreadyComposite: boolean,
+): Record<string, DailyPlan> {
+  if (!raw || typeof raw !== "object") return {};
+  const source = raw as Record<string, DailyPlan>;
+  if (alreadyComposite) return { ...source };
+  const result: Record<string, DailyPlan> = {};
+  for (const [date, plan] of Object.entries(source)) {
+    result[`${fallbackPetId}:${date}`] = plan;
+  }
+  return result;
+}
+
+export function normalizeDatabase(raw: unknown): Database {
+  // 예시(사실상 실제 시드) 데이터가 아니라 빈 상태를 기준으로 정규화한다.
+  // 그래야 로그인 전이나 데이터가 없는 상태에서 "봄이" 샘플이 섞여 들어가지 않는다.
+  const base = emptyDatabase();
+  if (!raw || typeof raw !== "object") return base;
+  const source = raw as Record<string, unknown>;
+
+  if (Array.isArray(source.pets)) {
+    // 이미 4단계(다견) 구조 — 반려동물 id를 그대로 보존하고, 기록에 이미
+    // 붙어있는 petId도 그대로 쓴다. 여기서 새 id를 만들지 않아야 백업을
+    // 내보냈다가 다시 불러오거나, 이미 마이그레이션된 데이터를 다시
+    // 정규화해도 반려동물이나 기록이 중복되지 않는다.
+    const pets = parsePets(source.pets);
+    const fallbackPetId = pets[0].id;
+    return {
+      schemaVersion: 4,
+      pets,
+      batches: parseBatches(source.batches, fallbackPetId),
+      dryFoods: parseDryFoods(source.dryFoods, fallbackPetId),
+      snacks: parseSnacks(source.snacks, fallbackPetId),
+      medications: parseMedications(source.medications ?? source.meds, fallbackPetId),
+      feedLog: parseFeedLog(source.feedLog, fallbackPetId),
+      medLog: parseMedLog(source.medLog, fallbackPetId),
+      healthLog: parseHealthLog(source.healthLog ?? source.symptomLog, fallbackPetId),
+      dailyPlans: parseDailyPlans(source.dailyPlans, fallbackPetId, true),
+    };
+  }
+
+  // v3 이하(단일 반려동물) 또는 그보다 예전 레거시(dog) 구조. 반려동물
+  // 하나로 취급하고, 새 petId를 하나만 만들어 이 반려동물과 기존의 모든
+  // 기록·재고·계획에 동일하게 연결한다. 이 분기는 raw에 pets 배열이 없을
+  // 때만 타므로, 한 번 4단계로 옮겨진 데이터를 다시 정규화해도 여기로
+  // 다시 들어오지 않는다(=반려동물이 중복 생성되지 않는다).
+  const legacyDog = (source.dog ?? source.pet ?? {}) as Record<string, unknown>;
+  const petId = String(legacyDog.id ?? uid("pet"));
+  const pet: Pet = {
+    id: petId,
+    name: String(legacyDog.name ?? ""),
+    birthdate: String(legacyDog.birthdate ?? ""),
+    weightKg: toNumber(legacyDog.weightKg),
+    targetWeightKg: legacyDog.idealWeightKg
+      ? toNumber(legacyDog.idealWeightKg)
+      : ((legacyDog.targetWeightKg as number | null) ?? null),
+    activity: (legacyDog.activity as Pet["activity"]) ?? "normal",
+    condition:
+      legacyDog.disease === "chronic" || legacyDog.disease === "acute"
+        ? (legacyDog.disease as Pet["condition"])
+        : ((legacyDog.condition as Pet["condition"]) ?? "none"),
+    weightGoal: (legacyDog.weightGoal as Pet["weightGoal"]) ?? "maintain",
+    dailyTargetKcal: toNumber(legacyDog.dailyTargetKcal),
+    vetTargetKcal: legacyDog.vetTargetKcal ? toNumber(legacyDog.vetTargetKcal) : null,
+    feedingsPerDay: Math.max(1, toNumber(legacyDog.feedingsPerDay, 3)),
+    fatLimitG: legacyDog.fatLimitG ? toNumber(legacyDog.fatLimitG) : null,
+    naturalRatio: toNumber(legacyDog.feedNatRatio ?? legacyDog.naturalRatio, 100),
+    batchId: String(legacyDog.feedBatchId ?? legacyDog.batchId ?? ""),
+    dryFoodId: String(legacyDog.feedDryId ?? legacyDog.dryFoodId ?? ""),
+    sex: (legacyDog.sex as Pet["sex"]) ?? "female-neutered",
+    registrationNo: String(legacyDog.registrationNo ?? ""),
+    photoDataUrl: typeof legacyDog.photoDataUrl === "string" ? legacyDog.photoDataUrl : null,
+  };
 
   return {
-    schemaVersion: 3,
-    pet,
-    batches,
-    dryFoods,
-    snacks,
-    medications,
-    feedLog,
-    medLog: Array.isArray(source.medLog)
-      ? (source.medLog as Record<string, unknown>[]).map((m) => ({
-          id: String(m.id ?? uid("medlog")),
-          medicationId: String(m.medicationId ?? m.medId ?? ""),
-          datetime: String(m.datetime ?? `${localDate()}T${localTime()}`),
-          stockUsed: toNumber(m.stockUsed, 0),
-        }))
-      : [],
-    healthLog,
-    dailyPlans:
-      source.dailyPlans && typeof source.dailyPlans === "object"
-        ? (source.dailyPlans as Record<string, DailyPlan>)
-        : {},
+    schemaVersion: 4,
+    pets: [pet],
+    batches: Array.isArray(source.batches) ? parseBatches(source.batches, petId) : base.batches,
+    dryFoods: Array.isArray(source.dryFoods) ? parseDryFoods(source.dryFoods, petId) : base.dryFoods,
+    snacks: Array.isArray(source.snacks) ? parseSnacks(source.snacks, petId) : base.snacks,
+    medications: Array.isArray(source.medications ?? source.meds)
+      ? parseMedications(source.medications ?? source.meds, petId)
+      : base.medications,
+    feedLog: parseFeedLog(source.feedLog, petId),
+    medLog: parseMedLog(source.medLog, petId),
+    healthLog: parseHealthLog(source.healthLog ?? source.symptomLog, petId),
+    dailyPlans: parseDailyPlans(source.dailyPlans, petId, false),
   };
 }
 
@@ -589,7 +786,7 @@ export function applyMedicationDose(stock: number, stockPerDose: number) {
   return roundTo(Math.max(0, stock - stockPerDose));
 }
 
-export function planSettingsHash(db: Database) {
+export function planSettingsHash(db: PetView) {
   const pet = db.pet;
   const batch = db.batches.find((item) => item.id === pet.batchId);
   const dry = db.dryFoods.find((item) => item.id === pet.dryFoodId);
@@ -607,7 +804,7 @@ export function planSettingsHash(db: Database) {
   });
 }
 
-export function createPlanSnapshot(db: Database, date: string): DailyPlan | null {
+export function createPlanSnapshot(db: PetView, date: string): DailyPlan | null {
   const pet = db.pet;
   const batch = db.batches.find((item) => item.id === pet.batchId);
   const dry = db.dryFoods.find((item) => item.id === pet.dryFoodId);
@@ -915,8 +1112,92 @@ export function computeNextServing(
   return { remainingMeals, kcal, naturalG, dryG };
 }
 
+// 아래 3개 build* 함수는 PetDietApp 컴포넌트 안의 recordPlannedMeal/
+// takeMedication/quickHealthNote가 기록 객체를 만드는 부분만 그대로 뽑아낸
+// 순수 함수다(영양 계산·id/시간 생성 방식은 그대로, 재고 차감이나 updateDb
+// 호출 같은 부수효과는 그대로 컴포넌트에 남아 있다). 테스트에서 활성
+// 반려동물(petId)이 새 기록에 실제로 찍히는지 컴포넌트를 렌더링하지 않고도
+// 검증할 수 있도록 분리했다 — 컴포넌트는 이 함수들을 그대로 호출한다.
+export function buildPlannedMealRecord(params: {
+  petId: string;
+  today: string;
+  time?: string;
+  note?: string;
+  todayPlan: DailyPlan;
+  batch?: Batch;
+  dry?: DryFood;
+  naturalOfferedG: number;
+  naturalEatenG: number;
+  dryOfferedG: number;
+  dryEatenG: number;
+}): FeedRecord {
+  const { petId, today, time, note, todayPlan, batch, dry, naturalOfferedG, naturalEatenG, dryOfferedG, dryEatenG } =
+    params;
+  const kcal =
+    (naturalEatenG * todayPlan.naturalKcalPer100) / 100 + (dryEatenG * todayPlan.dryKcalPer100) / 100;
+  const protein =
+    ((batch?.proteinPer100 ?? 0) * naturalEatenG) / 100 + ((dry?.protein ?? 0) * dryEatenG) / 100;
+  const fat = ((batch?.fatPer100 ?? 0) * naturalEatenG) / 100 + ((dry?.fat ?? 0) * dryEatenG) / 100;
+  return {
+    id: uid("feed"),
+    petId,
+    datetime: `${today}T${time ?? localTime()}`,
+    label: [batch?.name, dry?.name].filter(Boolean).join(" + ") || "급여 계획",
+    source: "plan",
+    offeredG: naturalOfferedG + dryOfferedG,
+    eatenG: naturalEatenG + dryEatenG,
+    calculatedKcal: kcal,
+    protein,
+    fat,
+    note: note ?? "",
+    batchId: batch?.id,
+    dryFoodId: dry?.id,
+    naturalOfferedG,
+    naturalEatenG,
+    dryOfferedG,
+    dryEatenG,
+    naturalKcalPer100: todayPlan.naturalKcalPer100,
+    dryKcalPer100: todayPlan.dryKcalPer100,
+  };
+}
+
+export function buildMedicationLog(params: {
+  petId: string;
+  today: string;
+  medicationId: string;
+  stockUsed: number;
+}): MedicationLog {
+  return {
+    id: uid("medlog"),
+    petId: params.petId,
+    medicationId: params.medicationId,
+    datetime: `${params.today}T${localTime()}`,
+    stockUsed: params.stockUsed,
+  };
+}
+
+export function buildQuickHealthNote(params: { petId: string; today: string; note: string }): HealthRecord {
+  return {
+    id: uid("health"),
+    petId: params.petId,
+    datetime: `${params.today}T${localTime()}`,
+    weightKg: null,
+    bcs: null,
+    appetite: "normal",
+    vomitCount: 0,
+    stool: null,
+    vitality: "normal",
+    pain: false,
+    note: params.note.trim(),
+  };
+}
+
 export default function PetDietApp() {
   const [db, setDb] = useState<Database>(() => emptyDatabase());
+  // 지금 선택된 반려동물. db(가족과 동기화되는 본체 데이터)와는 별도로
+  // 관리하는 기기별 UI 상태다 — 반려동물을 전환해도 household push가
+  // 일어나지 않고, 다른 가족 구성원의 화면도 강제로 전환되지 않는다.
+  const [activePetId, setActivePetId] = useState<string>(() => db.pets[0]?.id ?? "");
   const [hydrated, setHydrated] = useState(false);
   const [page, setPage] = useState<Page>("home");
   const [history, setHistory] = useState<Page[]>([]);
@@ -942,7 +1223,14 @@ export default function PetDietApp() {
         const current = window.localStorage.getItem(STORAGE_KEY);
         const legacy = window.localStorage.getItem(LEGACY_KEY);
         if (current || legacy) {
-          setDb(normalizeDatabase(JSON.parse(current ?? legacy ?? "{}")));
+          const parsed = normalizeDatabase(JSON.parse(current ?? legacy ?? "{}"));
+          setDb(parsed);
+          const storedActivePetId = window.localStorage.getItem(ACTIVE_PET_KEY);
+          setActivePetId(
+            storedActivePetId && parsed.pets.some((p) => p.id === storedActivePetId)
+              ? storedActivePetId
+              : (parsed.pets[0]?.id ?? ""),
+          );
         }
       } catch {
         setDb(emptyDatabase());
@@ -955,6 +1243,21 @@ export default function PetDietApp() {
   useEffect(() => {
     if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   }, [db, hydrated]);
+
+  useEffect(() => {
+    if (hydrated && activePetId) window.localStorage.setItem(ACTIVE_PET_KEY, activePetId);
+  }, [activePetId, hydrated]);
+
+  // 동기화(가족 pull) 중 지금 선택된 반려동물이 사라졌다면(다른 구성원이
+  // 삭제했거나, 이 기기에 남아있던 activePetId가 더 이상 유효하지 않다면)
+  // 존재하는 첫 반려동물로 안전하게 전환한다.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (activePetId && !db.pets.some((p) => p.id === activePetId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActivePetId(db.pets[0]?.id ?? "");
+    }
+  }, [db.pets, hydrated, activePetId]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1032,11 +1335,13 @@ export default function PetDietApp() {
     const params = new URLSearchParams(window.location.search);
     const authError = params.get("authError");
     const googleLinked = params.get("googleLinked");
-    if (!authError && !googleLinked) return;
+    const reauthDone = params.get("reauthDone");
+    if (!authError && !googleLinked && !reauthDone) return;
 
     const messages: Record<string, string> = {
       login_required: "먼저 로그인해주세요.",
-      reauth_required: "본인 확인이 만료됐어요. 비밀번호를 다시 확인해주세요.",
+      reauth_required: "본인 확인이 만료됐어요. 다시 확인해주세요.",
+      reauth_account_mismatch: "본인 확인에 사용한 Google 계정이 이 계정에 연결된 계정과 달라요.",
       google_unavailable: "지금은 Google 로그인을 사용할 수 없어요.",
       google_cancelled: "Google 로그인을 취소했어요.",
       google_error: "Google 로그인 중 문제가 발생했어요.",
@@ -1047,13 +1352,24 @@ export default function PetDietApp() {
       account_unavailable: "이용할 수 없는 계정이에요.",
       consent_required: "Google로 처음 가입하려면 회원가입 탭에서 약관에 동의한 뒤 다시 시도해주세요.",
     };
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setToast(
-      googleLinked ? "Google 계정을 연결했어요." : messages[authError ?? ""] ?? "처리하지 못했어요.",
-    );
+    const reauthDoneMessages: Record<string, string> = {
+      "account-delete": "본인 확인을 완료했어요. 아래에서 탈퇴 확정 버튼을 다시 눌러주세요.",
+      "ownership-transfer": "본인 확인을 완료했어요. 아래에서 이전 확정 버튼을 다시 눌러주세요.",
+      "household-delete": "본인 확인을 완료했어요. 아래에서 가족 공간 삭제 확정 버튼을 다시 눌러주세요.",
+    };
+    if (reauthDone) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPage("settings");
+      setToast(reauthDoneMessages[reauthDone] ?? "본인 확인을 완료했어요.");
+    } else {
+      setToast(
+        googleLinked ? "Google 계정을 연결했어요." : messages[authError ?? ""] ?? "처리하지 못했어요.",
+      );
+    }
     const url = new URL(window.location.href);
     url.searchParams.delete("authError");
     url.searchParams.delete("googleLinked");
+    url.searchParams.delete("reauthDone");
     window.history.replaceState(null, "", url.pathname + url.search);
   }, [hydrated]);
 
@@ -1093,41 +1409,23 @@ export default function PetDietApp() {
         return;
       }
       householdDataVersion.current = payload.household.dataVersion;
-      setToast("가족을 만들었어요. 초대 코드를 가족에게 공유해보세요.");
+      setToast("가족을 만들었어요. 이메일로 구성원을 초대해보세요.");
       await refreshHousehold();
     } finally {
       setFamilyBusy(false);
     }
   }
 
-  async function joinHousehold(inviteCode: string) {
-    setFamilyBusy(true);
-    try {
-      const res = await fetch("/api/household/join", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inviteCode }),
-      });
-      const payload = (await res.json()) as {
-        error?: string;
-        household?: HouseholdInfo;
-        data?: unknown;
-      };
-      if (!res.ok || !payload.household) {
-        setToast(payload.error ?? "가족에 참여하지 못했어요.");
-        return;
-      }
-      householdDataVersion.current = payload.household.dataVersion;
-      applyingRemoteUpdate.current = true;
-      setDb(normalizeDatabase(payload.data));
-      setHousehold(payload.household);
-      setToast("가족에 참여했어요. 가족의 데이터로 갱신했어요.");
-    } finally {
-      setFamilyBusy(false);
-    }
-  }
-
   async function leaveHousehold() {
+    if (!household) return;
+    if (household.role === "owner") {
+      setToast(
+        household.members.length > 1
+          ? "관리자는 바로 나갈 수 없어요. 먼저 다른 구성원에게 소유권을 이전해주세요."
+          : "혼자 남은 관리자는 '나가기' 대신 '위험 영역'의 가족 공간 삭제를 이용해주세요.",
+      );
+      return;
+    }
     if (
       !window.confirm(
         "가족 공유를 그만둘까요? 지금까지 공유된 데이터는 이 기기에 그대로 남고, 앞으로는 이 기기에만 저장돼요.",
@@ -1136,7 +1434,12 @@ export default function PetDietApp() {
       return;
     setFamilyBusy(true);
     try {
-      await fetch("/api/household/leave", { method: "POST" });
+      const res = await fetch("/api/household/leave", { method: "POST" });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setToast(payload.error ?? "가족 공유를 나가지 못했어요.");
+        return;
+      }
       setHousehold(null);
       setToast("가족 공유를 나갔어요.");
     } finally {
@@ -1158,6 +1461,68 @@ export default function PetDietApp() {
     setAuthState("signed-out");
     setToast("계정을 삭제했어요.");
   }
+
+  // /invite/accept?token=... 으로 들어오면 그 페이지가 안전한 내부 경로인
+  // /?inviteToken=...으로 리다이렉트해준다. 이 앱은 별도 로그인 페이지가
+  // 없는 SPA라, 로그인 전이면 여기서 토큰을 잠시 들고 있다가 로그인/회원가입이
+  // 끝나는 즉시 자동으로 수락 API를 호출한다.
+  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("inviteToken");
+    if (!token) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingInviteToken(token);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("inviteToken");
+    window.history.replaceState(null, "", url.pathname + url.search);
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!pendingInviteToken) return;
+    if (authState === "signed-out") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPage("settings");
+      setToast("초대를 수락하려면 먼저 로그인하거나 회원가입해주세요.");
+      return;
+    }
+    if (authState !== "signed-in") return;
+    const token = pendingInviteToken;
+    setPendingInviteToken(null);
+    const inviteErrorMessages: Record<string, string> = {
+      not_found: "초대를 찾을 수 없거나 유효하지 않아요.",
+      cancelled: "취소된 초대예요. 가족 관리자에게 새 초대를 요청해주세요.",
+      used: "이미 사용된 초대예요.",
+      expired: "만료된 초대예요. 가족 관리자에게 새 초대를 요청해주세요.",
+      not_sent: "아직 발송 처리 중인 초대예요. 잠시 후 다시 시도해주세요.",
+      unverified_email: "이메일 인증을 먼저 완료한 뒤 초대 링크를 다시 열어주세요.",
+      email_mismatch: "로그인한 계정의 이메일이 초대받은 이메일과 달라요. 초대받은 이메일 계정으로 로그인해주세요.",
+      already_in_other_household: "이미 다른 가족에 속해 있어요. 먼저 기존 가족에서 나간 뒤 다시 시도해주세요.",
+      conflict: "초대를 처리하지 못했어요. 새로고침 후 다시 시도해주세요.",
+    };
+    fetch("/api/household/invitations/accept", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    })
+      .then(async (res) => {
+        const payload = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          code?: string;
+          ok?: boolean;
+          alreadyMember?: boolean;
+        };
+        if (!res.ok) {
+          setToast(payload.error ?? inviteErrorMessages[payload.code ?? ""] ?? "초대를 처리하지 못했어요.");
+          return;
+        }
+        setToast(payload.alreadyMember ? "이미 이 가족의 구성원이에요." : "가족에 합류했어요.");
+        await refreshHousehold();
+      })
+      .catch(() => setToast("네트워크 오류로 초대를 처리하지 못했어요."));
+  }, [pendingInviteToken, authState]);
 
   function open(next: Page) {
     setHistory((items) => [...items, page]);
@@ -1184,14 +1549,48 @@ export default function PetDietApp() {
     if (message) setToast(message);
   }
 
+  // db는 항상 "가족과 동기화되는 전체(멀티펫) 데이터"다. 화면 대부분은
+  // 지금 선택된 반려동물 하나만 신경 쓰면 되므로, 기존 컴포넌트들이 원래
+  // 쓰던 모양(pet 단수 + 이 반려동물의 기록만 담긴 배열)으로 파생시킨 뷰를
+  // 만들어 화면에는 이 view를 db처럼 내려준다. updateDb(현재 db를 바꾸는
+  // 함수)는 항상 전체 db를 대상으로 동작해야 하므로 view가 아니라 실제
+  // db/setDb를 그대로 사용한다.
+  const view: PetView = useMemo(() => buildPetView(db, activePetId), [db, activePetId]);
+
+  function switchPet(petId: string) {
+    setActivePetId(petId);
+  }
+
+  function addPet(pet: Omit<Pet, "id">) {
+    const id = uid("pet");
+    updateDb(
+      (current) => ({ ...current, pets: [...current.pets, { ...pet, id }] }),
+      `${pet.name || "새 반려동물"}을 추가했어요.`,
+    );
+    setActivePetId(id);
+    return id;
+  }
+
+  // 반려동물 삭제: 마지막 한 마리는 차단하고, 그 반려동물이 걸려있는
+  // 급여·재고·건강·계획 기록도 함께 지운다. activePetId가 삭제된 반려동물을
+  // 가리키고 있었다면 위쪽 안전-전환 useEffect가 알아서 첫 반려동물로
+  // 되돌린다(가족 동기화로 다른 기기에서 삭제된 경우와 동일한 경로).
+  function deletePet(petId: string) {
+    if (db.pets.length <= 1) {
+      setToast("마지막 반려동물은 삭제할 수 없어요.");
+      return;
+    }
+    updateDb((current) => cascadeDeletePet(current, petId), "반려동물과 관련 기록을 모두 삭제했어요.");
+  }
+
   const todayFeeds = useMemo(
     () =>
-      dateRecords(db.feedLog, today).sort((a, b) => a.datetime.localeCompare(b.datetime)),
-    [db.feedLog, today],
+      dateRecords(view.feedLog, today).sort((a, b) => a.datetime.localeCompare(b.datetime)),
+    [view.feedLog, today],
   );
   const todayKcal = todayFeeds.reduce((sum, item) => sum + item.calculatedKcal, 0);
-  const todayPlan = db.dailyPlans[today];
-  const planIsCurrent = todayPlan?.settingsHash === planSettingsHash(db);
+  const todayPlan = view.dailyPlans[today];
+  const planIsCurrent = todayPlan?.settingsHash === planSettingsHash(view);
   const { attempted: completedPlanMeals, eaten: eatenPlanMeals } = planMealCounts(todayFeeds);
 
   const nextServing = useMemo(
@@ -1214,8 +1613,8 @@ export default function PetDietApp() {
   // 원자적으로 처리한다. 이렇게 해야 "설정 저장을 누르지 않고 오늘 계획 적용을
   // 눌렀을 때 화면에 보이는 값이 아니라 예전 저장값으로 적용되는" 문제가 없다.
   function applyTodayPlan(petOverride?: Pet) {
-    const draftDb = petOverride ? { ...db, pet: petOverride } : db;
-    const snapshot = createPlanSnapshot(draftDb, today);
+    const draftView = petOverride ? { ...view, pet: petOverride } : view;
+    const snapshot = createPlanSnapshot(draftView, today);
     if (!snapshot) {
       setToast("급여 계획에서 목표 열량과 급여원을 먼저 저장해주세요.");
       open("plan");
@@ -1227,11 +1626,11 @@ export default function PetDietApp() {
       );
       if (!confirmed) return;
     }
+    const petId = view.pet.id;
     updateDb(
       (current) => ({
-        ...current,
-        pet: petOverride ?? current.pet,
-        dailyPlans: { ...current.dailyPlans, [today]: snapshot },
+        ...(petOverride ? withPet(current, petId, () => petOverride) : current),
+        dailyPlans: { ...current.dailyPlans, [`${petId}:${today}`]: snapshot },
       }),
       todayPlan ? "변경된 설정으로 오늘 계획을 업데이트했어요." : "오늘 급여 계획을 적용했어요.",
     );
@@ -1256,8 +1655,8 @@ export default function PetDietApp() {
     // (목표보다 덜 급여했다면 목표만큼 덜어낸 것, 더 급여했다면 그만큼 더 덜어낸 것)
     const naturalUsedG = Math.max(naturalOfferedG, naturalEatenG);
     const dryUsedG = Math.max(dryOfferedG, dryEatenG);
-    const batch = db.batches.find((item) => item.id === todayPlan.batchId);
-    const dry = db.dryFoods.find((item) => item.id === todayPlan.dryFoodId);
+    const batch = view.batches.find((item) => item.id === todayPlan.batchId);
+    const dry = view.dryFoods.find((item) => item.id === todayPlan.dryFoodId);
     if (batch && naturalUsedG > remaining(batch.totalWeight, batch.usedWeight) + 0.001) {
       setToast(`${batch.name} 재고가 부족해 기록하지 않았어요.`);
       return;
@@ -1266,35 +1665,19 @@ export default function PetDietApp() {
       setToast(`${dry.name} 재고가 부족해 기록하지 않았어요.`);
       return;
     }
-    const kcal =
-      (naturalEatenG * todayPlan.naturalKcalPer100) / 100 +
-      (dryEatenG * todayPlan.dryKcalPer100) / 100;
-    const protein =
-      ((batch?.proteinPer100 ?? 0) * naturalEatenG) / 100 +
-      ((dry?.protein ?? 0) * dryEatenG) / 100;
-    const fat =
-      ((batch?.fatPer100 ?? 0) * naturalEatenG) / 100 +
-      ((dry?.fat ?? 0) * dryEatenG) / 100;
-    const record: FeedRecord = {
-      id: uid("feed"),
-      datetime: `${today}T${values?.time ?? localTime()}`,
-      label: [batch?.name, dry?.name].filter(Boolean).join(" + ") || "급여 계획",
-      source: "plan",
-      offeredG: naturalOfferedG + dryOfferedG,
-      eatenG: naturalEatenG + dryEatenG,
-      calculatedKcal: kcal,
-      protein,
-      fat,
-      note: values?.note ?? "",
-      batchId: batch?.id,
-      dryFoodId: dry?.id,
+    const record = buildPlannedMealRecord({
+      petId: view.pet.id,
+      today,
+      time: values?.time,
+      note: values?.note,
+      todayPlan,
+      batch,
+      dry,
       naturalOfferedG,
       naturalEatenG,
       dryOfferedG,
       dryEatenG,
-      naturalKcalPer100: todayPlan.naturalKcalPer100,
-      dryKcalPer100: todayPlan.dryKcalPer100,
-    };
+    });
     updateDb(
       (current) => ({
         ...current,
@@ -1374,8 +1757,8 @@ export default function PetDietApp() {
     const dryUsedG = Math.max(dryOfferedG, dryEatenG);
     const previousNaturalUsedG = Math.max(record.naturalOfferedG ?? 0, record.naturalEatenG ?? 0);
     const previousDryUsedG = Math.max(record.dryOfferedG ?? 0, record.dryEatenG ?? 0);
-    const batch = db.batches.find((item) => item.id === record.batchId);
-    const dry = db.dryFoods.find((item) => item.id === record.dryFoodId);
+    const batch = view.batches.find((item) => item.id === record.batchId);
+    const dry = view.dryFoods.find((item) => item.id === record.dryFoodId);
     const batchAvailable =
       (batch ? remaining(batch.totalWeight, batch.usedWeight) : 0) + previousNaturalUsedG;
     const dryAvailable =
@@ -1400,7 +1783,7 @@ export default function PetDietApp() {
   }
 
   function takeMedication(medication: Medication) {
-    const done = dateRecords(db.medLog, today).filter(
+    const done = dateRecords(view.medLog, today).filter(
       (item) => item.medicationId === medication.id,
     ).length;
     if (done >= medication.perDay) {
@@ -1418,12 +1801,12 @@ export default function PetDietApp() {
       setToast(`${medication.name} 재고가 부족해요.`);
       return;
     }
-    const log: MedicationLog = {
-      id: uid("medlog"),
+    const log = buildMedicationLog({
+      petId: view.pet.id,
+      today,
       medicationId: medication.id,
-      datetime: `${today}T${localTime()}`,
       stockUsed: medication.stockPerDose,
-    };
+    });
     updateDb(
       (current) => ({
         ...current,
@@ -1455,23 +1838,12 @@ export default function PetDietApp() {
 
   function quickHealthNote(note: string) {
     if (!note.trim()) return;
-    const row: HealthRecord = {
-      id: uid("health"),
-      datetime: `${today}T${localTime()}`,
-      weightKg: null,
-      bcs: null,
-      appetite: "normal",
-      vomitCount: 0,
-      stool: null,
-      vitality: "normal",
-      pain: false,
-      note: note.trim(),
-    };
+    const row = buildQuickHealthNote({ petId: view.pet.id, today, note });
     updateDb((current) => ({ ...current, healthLog: [...current.healthLog, row] }), "건강 메모를 남겼어요.");
   }
 
   function recordSnack(snackId: string, grams: number) {
-    const snack = db.snacks.find((item) => item.id === snackId);
+    const snack = view.snacks.find((item) => item.id === snackId);
     if (!snack || !(grams > 0)) return;
     if (grams > remaining(snack.totalWeight, snack.usedWeight) + 0.001) {
       setToast(`${snack.name} 재고가 부족해요.`);
@@ -1480,6 +1852,7 @@ export default function PetDietApp() {
     const kcal = (grams * snack.kcalPer100) / 100;
     const record: FeedRecord = {
       id: uid("feed"),
+      petId: view.pet.id,
       datetime: `${today}T${localTime()}`,
       label: snack.name,
       source: "snack",
@@ -1495,7 +1868,7 @@ export default function PetDietApp() {
     // 간식 열량이 하루 목표 열량의 10%를 넘으면(수의사들이 흔히 권장하는
     // 기준) 가볍게 경고해서, 자연식·사료 배합의 영양 균형이 조용히 무너지지
     // 않도록 한다.
-    const target = todayPlan?.targetKcal ?? effectiveTarget(db.pet);
+    const target = todayPlan?.targetKcal ?? effectiveTarget(view.pet);
     const snackKcalSoFar = todayFeeds
       .filter((item) => item.source === "snack")
       .reduce((sum, item) => sum + item.calculatedKcal, 0);
@@ -1538,7 +1911,11 @@ export default function PetDietApp() {
   }
 
   const shared = {
-    db,
+    db: view,
+    pets: db.pets,
+    switchPet,
+    addPet,
+    deletePet,
     open,
     back,
     home,
@@ -1579,6 +1956,9 @@ export default function PetDietApp() {
       break;
     case "pet-edit":
       content = <PetEditPage {...shared} />;
+      break;
+    case "pet-add":
+      content = <PetAddPage {...shared} />;
       break;
     case "natural":
       content = <NaturalFoodPage {...shared} />;
@@ -1634,7 +2014,6 @@ export default function PetDietApp() {
           household={household}
           familyBusy={familyBusy}
           createHousehold={createHousehold}
-          joinHousehold={joinHousehold}
           leaveHousehold={leaveHousehold}
           refreshHousehold={refreshHousehold}
           logout={logout}
@@ -1665,14 +2044,18 @@ export default function PetDietApp() {
         />
       )}
       {snackSheetOpen && (
-        <SnackSheet snacks={db.snacks} onClose={() => setSnackSheetOpen(false)} onSave={recordSnack} openSnackPage={() => { setSnackSheetOpen(false); open("snacks"); }} />
+        <SnackSheet snacks={view.snacks} onClose={() => setSnackSheetOpen(false)} onSave={recordSnack} openSnackPage={() => { setSnackSheetOpen(false); open("snacks"); }} />
       )}
     </main>
   );
 }
 
 type SharedProps = {
-  db: Database;
+  db: PetView;
+  pets: Pet[];
+  switchPet: (petId: string) => void;
+  addPet: (pet: Omit<Pet, "id">) => string;
+  deletePet: (petId: string) => void;
   open: (page: Page) => void;
   back: () => void;
   home: () => void;
@@ -2092,15 +2475,38 @@ function MenuPage({ db, open, back, home }: SharedProps) {
   );
 }
 
-function PetPage({ db, open, back, home }: SharedProps) {
+function PetPage({ db, pets, switchPet, deletePet, open, back, home }: SharedProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const canDelete = pets.length > 1;
   return (
     <>
       <PageHeader title="반려동물 관리" onBack={back} onHome={home} />
       <div className="page-content">
+        {/* 한 마리만 있으면 선택기를 아예 보여주지 않는다 — 다견 UI가 불필요하게
+            복잡해 보이지 않게 하기 위해서다. */}
+        {pets.length > 1 && (
+          <section className="form-section">
+            <h2>반려동물 선택</h2>
+            <div className="pet-switch-list">
+              {pets.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`pet-switch-chip ${item.id === db.pet.id ? "active" : ""}`}
+                  aria-pressed={item.id === db.pet.id}
+                  onClick={() => switchPet(item.id)}
+                >
+                  <PetAvatar photoUrl={item.photoDataUrl} />
+                  <span>{item.name || "이름 없음"}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
         <section className="pet-profile-card">
           <PetAvatar large photoUrl={db.pet.photoDataUrl} />
           <div className="pet-name-row">
-            <h2>{db.pet.name}</h2>
+            <h2>{db.pet.name || "이름 없음"}</h2>
             <IconButton label="반려동물 정보 수정" onClick={() => open("pet-edit")} className="pet-edit-button">
               <Edit3 size={17} />
             </IconButton>
@@ -2138,6 +2544,37 @@ function PetPage({ db, open, back, home }: SharedProps) {
             <strong>{db.pet.condition === "chronic" ? "만성질환" : db.pet.condition === "acute" ? "회복기" : "일반"}</strong>
           </div>
         </div>
+        <div className="button-grid">
+          <button className="button secondary" onClick={() => open("pet-add")}>
+            <Plus size={18} /> 반려동물 추가
+          </button>
+          <button
+            className="button danger-outline"
+            disabled={!canDelete}
+            title={canDelete ? undefined : "마지막 반려동물은 삭제할 수 없어요."}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 size={18} /> 이 반려동물 삭제
+          </button>
+        </div>
+        {confirmDelete && (
+          <ConfirmDialog title="반려동물 삭제" onClose={() => setConfirmDelete(false)}>
+            <p className="form-note warning">
+              {db.pet.name || "이 반려동물"}을 삭제하면 급여·재고·건강·통계 기록도 함께 영구히
+              삭제돼요. 되돌릴 수 없어요.
+            </p>
+            <button
+              className="button danger full"
+              onClick={() => {
+                deletePet(db.pet.id);
+                setConfirmDelete(false);
+                back();
+              }}
+            >
+              삭제 확정
+            </button>
+          </ConfirmDialog>
+        )}
       </div>
     </>
   );
@@ -2156,7 +2593,7 @@ function PetEditPage({ db, updateDb, back, home }: SharedProps) {
   }
   function save(event: FormEvent) {
     event.preventDefault();
-    updateDb((current) => ({ ...current, pet }), "반려동물 정보를 저장했어요.");
+    updateDb((current) => withPet(current, pet.id, () => pet), "반려동물 정보를 저장했어요.");
     back();
   }
   return (
@@ -2265,6 +2702,117 @@ function PetEditPage({ db, updateDb, back, home }: SharedProps) {
   );
 }
 
+// PetEditPage와 필드 구성은 거의 같지만, 기존 반려동물을 고쳐쓰는 게 아니라
+// 새 반려동물을 처음부터 만든다. addPet이 새 id를 부여하고 즉시 활성
+// 반려동물로 전환한다.
+function PetAddPage({ addPet, back, home }: SharedProps) {
+  const [pet, setPet] = useState<Omit<Pet, "id">>(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { id, ...rest } = emptyPet();
+    return rest;
+  });
+  function updateAndRecalc(patch: Partial<Pet>) {
+    setPet((current) => {
+      const next = { ...current, ...patch };
+      return { ...next, dailyTargetKcal: merEstimate(next as Pet) };
+    });
+  }
+  function save(event: FormEvent) {
+    event.preventDefault();
+    if (!pet.name.trim()) return;
+    addPet(pet);
+    back();
+  }
+  return (
+    <>
+      <PageHeader title="반려동물 추가" onBack={back} onHome={home} />
+      <form className="page-content form-page" onSubmit={save}>
+        <section className="form-section">
+          <h2>기본 정보</h2>
+          <label>
+            반려동물 이름
+            <input value={pet.name} onChange={(e) => setPet({ ...pet, name: e.target.value })} required />
+          </label>
+          <div className="field-grid">
+            <label>
+              생년월일
+              <input type="date" value={pet.birthdate} onChange={(e) => setPet({ ...pet, birthdate: e.target.value })} />
+            </label>
+            <label>
+              성별
+              <select value={pet.sex} onChange={(e) => setPet({ ...pet, sex: e.target.value as Pet["sex"] })}>
+                <option value="male">수컷</option>
+                <option value="female">암컷</option>
+                <option value="male-neutered">수컷(중성화)</option>
+                <option value="female-neutered">암컷(중성화)</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            동물등록번호
+            <input value={pet.registrationNo} onChange={(e) => setPet({ ...pet, registrationNo: e.target.value })} placeholder="선택 입력" />
+          </label>
+        </section>
+        <section className="form-section">
+          <h2>건강과 급여 기준</h2>
+          <div className="field-grid">
+            <label>
+              현재 체중(kg)
+              <input type="number" min="0" step="0.01" value={pet.weightKg} onChange={(e) => updateAndRecalc({ weightKg: nonNegative(Number(e.target.value)) })} />
+            </label>
+            <label>
+              목표 체중(kg)
+              <input type="number" min="0" step="0.01" value={pet.targetWeightKg ?? ""} onChange={(e) => updateAndRecalc({ targetWeightKg: e.target.value ? nonNegative(Number(e.target.value)) : null })} />
+            </label>
+          </div>
+          <label>
+            활동량
+            <select value={pet.activity} onChange={(e) => updateAndRecalc({ activity: e.target.value as Pet["activity"] })}>
+              <option value="low">낮음 · 대부분 휴식</option>
+              <option value="normal">보통 · 가벼운 산책</option>
+              <option value="high">높음 · 활발한 활동</option>
+            </select>
+          </label>
+          <label>
+            질환/상태
+            <select value={pet.condition} onChange={(e) => updateAndRecalc({ condition: e.target.value as Pet["condition"] })}>
+              <option value="none">특별한 질환 없음</option>
+              <option value="chronic">만성질환 관리 중</option>
+              <option value="acute">급성 회복기</option>
+            </select>
+          </label>
+          <label>
+            체중 관리 목표
+            <select value={pet.weightGoal} onChange={(e) => updateAndRecalc({ weightGoal: e.target.value as Pet["weightGoal"] })}>
+              <option value="maintain">현재 체중 유지</option>
+              <option value="loss">체중 감량</option>
+              <option value="gain">체중 증량</option>
+            </select>
+          </label>
+          <div className="field-grid">
+            <label>
+              1일 목표 kcal
+              <input type="number" min="0" value={pet.dailyTargetKcal} onChange={(e) => setPet({ ...pet, dailyTargetKcal: nonNegative(Number(e.target.value)) })} />
+            </label>
+            <label>
+              1일 급여 횟수
+              <input type="number" min="1" max="12" value={pet.feedingsPerDay} onChange={(e) => setPet({ ...pet, feedingsPerDay: Math.max(1, nonNegative(Number(e.target.value))) })} />
+            </label>
+          </div>
+          <p className="form-note">
+            체중·활동량·질환 정보를 반영해 1일 목표 kcal이 자동 계산돼요(참고값{" "}
+            <strong>{merEstimate(pet as Pet)} kcal</strong>). 수의사 지정값이 따로 있다면 위 칸에 직접 덮어써주세요.
+          </p>
+        </section>
+        <button className="button primary full" type="submit">
+          <Plus size={18} />
+          반려동물 추가
+        </button>
+      </form>
+    </>
+  );
+}
+
 function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
   const [lines, setLines] = useState<IngredientLine[]>([
     { ...findIngredient("닭가슴살(삶은)"), grams: 0 },
@@ -2331,6 +2879,7 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
     }
     const batch: Batch = {
       id: uid("batch"),
+      petId: db.pet.id,
       name: name.trim() || `${dateMade} 자연식`,
       dateMade,
       expiry,
@@ -2344,9 +2893,8 @@ function NaturalFoodPage({ db, updateDb, back, home, setToast }: SharedProps) {
     };
     updateDb(
       (current) => ({
-        ...current,
+        ...withPet(current, db.pet.id, (p) => ({ ...p, batchId: p.batchId || batch.id })),
         batches: [...current.batches, batch],
-        pet: { ...current.pet, batchId: current.pet.batchId || batch.id },
       }),
       "레시피를 확정하고 재고에 등록했어요.",
     );
@@ -2537,6 +3085,7 @@ function DryFoodPage({ db, updateDb, back, home, setToast, today }: SharedProps)
     if (!name) return;
     const item: DryFood = {
       id: uid("dry"),
+      petId: db.pet.id,
       name,
       totalWeight: toNumber(form.get("totalWeight")),
       usedWeight: 0,
@@ -2555,9 +3104,8 @@ function DryFoodPage({ db, updateDb, back, home, setToast, today }: SharedProps)
     }
     updateDb(
       (current) => ({
-        ...current,
+        ...withPet(current, db.pet.id, (p) => ({ ...p, dryFoodId: p.dryFoodId || item.id })),
         dryFoods: [...current.dryFoods, item],
-        pet: { ...current.pet, dryFoodId: current.pet.dryFoodId || item.id },
       }),
       "시중사료를 등록했어요.",
     );
@@ -2640,6 +3188,7 @@ function SnackPage({ db, updateDb, back, home, setToast }: SharedProps) {
     if (!name) return;
     const item: Snack = {
       id: uid("snack"),
+      petId: db.pet.id,
       name,
       totalWeight: toNumber(form.get("totalWeight")),
       usedWeight: 0,
@@ -2785,7 +3334,7 @@ function MedicationPage({
       );
       setEditingId(null);
     } else {
-      const medication: Medication = { id: uid(type === "med" ? "med" : "supp"), ...base };
+      const medication: Medication = { id: uid(type === "med" ? "med" : "supp"), petId: db.pet.id, ...base };
       updateDb((current) => ({ ...current, medications: [...current.medications, medication] }), `${medication.name}을 등록했어요.`);
     }
     event.currentTarget.reset();
@@ -3028,7 +3577,7 @@ function HealthPage({ db, updateDb, back, home, setToast }: SharedProps) {
         "건강 기록을 수정했어요.",
       );
     } else {
-      const record: HealthRecord = { id: uid("health"), ...base };
+      const record: HealthRecord = { id: uid("health"), petId: db.pet.id, ...base };
       updateDb((current) => ({ ...current, healthLog: [...current.healthLog, record] }), "건강 기록을 저장했어요.");
     }
     closeForm();
@@ -3145,7 +3694,7 @@ function HealthPage({ db, updateDb, back, home, setToast }: SharedProps) {
 
 // 하루치 kcal/목표를 계산하는 공용 함수. 주별/월별 집계가 이 값을 여러 날에
 // 걸쳐 평균 내는 방식으로 재사용한다.
-export function dayKcalAndTarget(db: Database, key: string) {
+export function dayKcalAndTarget(db: PetView, key: string) {
   const feeds = dateRecords(db.feedLog, key);
   return {
     kcal: feeds.reduce((sum, item) => sum + item.calculatedKcal, 0),
@@ -3396,7 +3945,10 @@ function FeedingPlanPage({
     !!plan && plan.settingsHash === planSettingsHash({ ...db, pet: { ...pet, naturalRatio: ratio } });
 
   function saveSettings() {
-    updateDb((current) => ({ ...current, pet: { ...pet, naturalRatio: ratio } }), "급여 설정을 저장했어요.");
+    updateDb(
+      (current) => withPet(current, pet.id, () => ({ ...pet, naturalRatio: ratio })),
+      "급여 설정을 저장했어요.",
+    );
   }
   return (
     <>
@@ -3468,7 +4020,6 @@ function SettingsPage({
   household,
   familyBusy,
   createHousehold,
-  joinHousehold,
   leaveHousehold,
   refreshHousehold,
   logout,
@@ -3481,44 +4032,82 @@ function SettingsPage({
   household: HouseholdInfo | null;
   familyBusy: boolean;
   createHousehold: (name: string) => void;
-  joinHousehold: (inviteCode: string) => void;
   leaveHousehold: () => void;
   refreshHousehold: () => void;
   logout: () => void;
   onAccountDeleted: () => void;
 }) {
+  // 계정 정보(이메일 인증 상태, 비밀번호 보유 여부, Google 연결 여부,
+  // 이메일 발송 가능 여부)는 여기서 한 번만 불러와 "내 계정", "가족 공유"
+  // (나 태그, 비밀번호 유무), "위험 영역"(탈퇴 로직)이 함께 사용한다.
+  const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
+
+  const loadAccountInfo = useCallback(() => {
+    if (authState !== "signed-in") {
+      setAccountInfo(null);
+      return;
+    }
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload: AccountInfo | null) => {
+        if (payload) setAccountInfo(payload);
+      })
+      .catch(() => {});
+  }, [authState]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadAccountInfo();
+  }, [loadAccountInfo]);
+
   return (
     <>
       <PageHeader title="설정" onBack={back} onHome={home} />
       <div className="page-content form-page">
-        <SectionTitle title="백업과 가족 계정을 관리하세요" description="급여 목표와 배분 설정은 메뉴의 '급여 계획'에서 관리합니다." />
-        <section className="form-section">
-          <h2>데이터 백업</h2>
-          <p className="form-note">기록은 이 브라우저에 저장됩니다. 기기를 바꾸기 전 JSON 백업을 내려받으세요.</p>
-          <div className="button-grid">
-            <button className="button secondary" onClick={exportData}><Download size={18} /> 내보내기</button>
-            <button className="button secondary" onClick={() => importRef.current?.click()}><Upload size={18} /> 가져오기</button>
-          </div>
-          <input ref={importRef} className="hidden-input" type="file" accept="application/json" onChange={(e) => e.target.files?.[0] && importData(e.target.files[0])} />
-        </section>
+        <SectionTitle title="계정과 가족, 백업을 관리하세요" description="급여 목표와 배분 설정은 메뉴의 '급여 계획'에서 관리합니다." />
+
+        {authState === "checking" && <p className="form-note">로그인 상태를 확인하는 중…</p>}
+        {authState === "signed-out" && (
+          <section className="form-section">
+            <h2>로그인</h2>
+            <AuthForm onAuthChange={refreshHousehold} />
+          </section>
+        )}
+        {authState === "signed-in" && accountInfo && (
+          <MyAccountSection info={accountInfo} onInfoChange={loadAccountInfo} onLogout={logout} />
+        )}
+
         <FamilySharingSection
           authState={authState}
           household={household}
           busy={familyBusy}
+          currentUserId={accountInfo?.user.id ?? null}
+          hasPassword={accountInfo?.hasPassword ?? null}
           onCreate={createHousehold}
-          onJoin={joinHousehold}
-          onLeave={leaveHousehold}
-          onAuthChange={refreshHousehold}
-          onLogout={logout}
-          onAccountDeleted={onAccountDeleted}
+          onHouseholdChange={refreshHousehold}
         />
-        <section className="form-section danger-zone">
-          <h2>전체 초기화</h2>
-          <button className="button danger" onClick={() => {
-            if (!window.confirm("모든 기록을 초기화할까요? 반려동물 프로필을 포함해 완전히 빈 상태가 되며, 되돌릴 수 없습니다.")) return;
-            updateDb(() => emptyDatabase(), "모든 데이터를 초기화했어요.");
-          }}><Trash2 size={18} /> 모든 데이터 초기화</button>
+
+        <section className="form-section">
+          <h2>데이터 관리</h2>
+          <p className="form-note">기록은 이 브라우저에 저장됩니다. 기기를 바꾸기 전 JSON 백업을 내려받으세요.</p>
+          <div className="button-grid">
+            <button className="button secondary" onClick={exportData}><Download size={18} /> 백업 내보내기</button>
+            <button className="button secondary" onClick={() => importRef.current?.click()}><Upload size={18} /> 백업 가져오기</button>
+          </div>
+          <input ref={importRef} className="hidden-input" type="file" accept="application/json" onChange={(e) => e.target.files?.[0] && importData(e.target.files[0])} />
         </section>
+
+        {authState === "signed-in" && (
+          <DangerZoneSection
+            household={household}
+            accountInfo={accountInfo}
+            busy={familyBusy}
+            onLeave={leaveHousehold}
+            onHouseholdChange={refreshHousehold}
+            onAccountDeleted={onAccountDeleted}
+            updateDb={updateDb}
+          />
+        )}
       </div>
     </>
   );
@@ -3530,18 +4119,48 @@ type AccountInfo = {
   hasPassword: boolean;
   providers: string[];
   consent: { upToDate: boolean };
+  emailServiceAvailable: boolean;
 };
 
-// 로그인 방법(비밀번호/Google), 이메일 인증 상태를 보여주고 바꿀 수 있는
-// 영역. household(가족)와는 별개로 /api/auth/me에서 정보를 가져온다.
-function AccountSettingsSection({
-  authState,
-  onAccountDeleted,
+// 위험한 작업 확인용 공용 모달. 기존에 BCS 안내 팝업에 쓰던 modal-backdrop/
+// modal-card 패턴을 그대로 재사용한다(새 UI 라이브러리를 추가하지 않기 위함).
+// 실제 확인 버튼/입력 필드는 children으로 넘겨받은 폼이 담당한다.
+function ConfirmDialog({
+  title,
+  onClose,
+  children,
 }: {
-  authState: AuthState;
-  onAccountDeleted: () => void;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
 }) {
-  const [info, setInfo] = useState<AccountInfo | null>(null);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <h2>{title}</h2>
+          <IconButton label="닫기" onClick={onClose}>
+            <X size={20} />
+          </IconButton>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// "내 계정" 카드: 이메일/인증상태, 비밀번호 로그인, Google 연결을 Google
+// Account류 설정 화면처럼 한 줄(row)씩 보여준다. 계정 탈퇴는 이제 여기 없다
+// — 되돌릴 수 없는 작업이라 위험 영역(DangerZoneSection)으로 옮겼다.
+function MyAccountSection({
+  info,
+  onInfoChange,
+  onLogout,
+}: {
+  info: AccountInfo;
+  onInfoChange: () => void;
+  onLogout: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -3550,28 +4169,6 @@ function AccountSettingsSection({
   const [newPassword, setNewPassword] = useState("");
   const [showReauth, setShowReauth] = useState(false);
   const [reauthPassword, setReauthPassword] = useState("");
-  const [showDeleteForm, setShowDeleteForm] = useState(false);
-  const [deletePassword, setDeletePassword] = useState("");
-  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState("");
-
-  async function loadInfo() {
-    try {
-      const res = await fetch("/api/auth/me");
-      if (!res.ok) return;
-      setInfo((await res.json()) as AccountInfo);
-    } catch {
-      // 계정 부가정보는 못 가져와도 앱 사용 자체에는 지장이 없어 조용히 넘어간다.
-    }
-  }
-
-  useEffect(() => {
-    if (authState === "signed-in") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      loadInfo();
-    } else {
-      setInfo(null);
-    }
-  }, [authState]);
 
   async function resendVerification() {
     setBusy(true);
@@ -3579,12 +4176,16 @@ function AccountSettingsSection({
     setNotice("");
     try {
       const res = await fetch("/api/auth/resend-verification", { method: "POST" });
-      const payload = (await res.json()) as { error?: string; alreadyVerified?: boolean };
+      const payload = (await res.json()) as { error?: string; alreadyVerified?: boolean; code?: string };
       if (!res.ok) {
-        setError(payload.error ?? "재전송에 실패했어요.");
+        setError(payload.error ?? "인증 메일을 보내지 못했어요. 잠시 후 다시 시도해 주세요.");
         return;
       }
-      setNotice(payload.alreadyVerified ? "이미 인증된 이메일이에요." : "인증 메일을 다시 보냈어요.");
+      setNotice(
+        payload.alreadyVerified
+          ? "이미 인증된 이메일이에요."
+          : "인증 메일을 보냈어요. 받은편지함과 스팸함을 확인해 주세요.",
+      );
     } catch {
       setError("네트워크 오류가 발생했어요.");
     } finally {
@@ -3612,7 +4213,7 @@ function AccountSettingsSection({
       setCurrentPassword("");
       setNewPassword("");
       setShowPasswordForm(false);
-      loadInfo();
+      onInfoChange();
     } catch {
       setError("네트워크 오류가 발생했어요.");
     } finally {
@@ -3655,7 +4256,7 @@ function AccountSettingsSection({
         return;
       }
       setNotice("Google 연결을 해제했어요.");
-      loadInfo();
+      onInfoChange();
     } catch {
       setError("네트워크 오류가 발생했어요.");
     } finally {
@@ -3674,7 +4275,7 @@ function AccountSettingsSection({
         return;
       }
       setNotice("다시 동의했어요.");
-      loadInfo();
+      onInfoChange();
     } catch {
       setError("네트워크 오류가 발생했어요.");
     } finally {
@@ -3682,37 +4283,11 @@ function AccountSettingsSection({
     }
   }
 
-  async function submitDeleteAccount(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const res = await fetch("/api/auth/delete-account", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          info?.hasPassword ? { password: deletePassword } : { confirmEmail: deleteConfirmEmail },
-        ),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        setError(payload.error ?? "탈퇴하지 못했어요.");
-        setBusy(false);
-        return;
-      }
-      onAccountDeleted();
-    } catch {
-      setError("네트워크 오류가 발생했어요.");
-      setBusy(false);
-    }
-  }
-
-  if (authState !== "signed-in" || !info) return null;
-
   const googleLinked = info.providers.includes("google");
 
   return (
-    <div className="menu-group">
+    <section className="form-section">
+      <h3>내 계정</h3>
       {!info.consent.upToDate && (
         <div className="inline-alert">
           <ShieldAlert size={18} /> 이용약관 또는 개인정보처리방침이 업데이트됐어요.
@@ -3721,74 +4296,97 @@ function AccountSettingsSection({
           </button>
         </div>
       )}
-      <div className="menu-row">
-        <span className="menu-icon"><Mail size={18} /></span>
-        <span>
-          <strong>{info.user.email}</strong>
-          <small>{info.emailVerified ? "이메일 인증됨" : "이메일 인증 필요"}</small>
-        </span>
-      </div>
-      {!info.emailVerified && (
-        <button className="button secondary full" disabled={busy} onClick={resendVerification}>
-          인증 메일 다시 보내기
-        </button>
-      )}
-      <div className="menu-row">
-        <span className="menu-icon"><KeyRound size={18} /></span>
-        <span>
-          <strong>비밀번호 로그인</strong>
-          <small>{info.hasPassword ? "설정됨" : "설정 안 됨"}</small>
-        </span>
-      </div>
-      <button
-        className="button secondary full"
-        disabled={busy}
-        onClick={() => setShowPasswordForm((value) => !value)}
-      >
-        {info.hasPassword ? "비밀번호 변경" : "비밀번호 설정"}
-      </button>
-      {showPasswordForm && (
-        <form onSubmit={submitPasswordChange} className="field-grid compact">
-          {info.hasPassword && (
+      <div className="settings-list">
+        <div className="settings-row">
+          <div className="settings-row-label">
+            <strong>이메일</strong>
+            <small>{info.user.email}</small>
+          </div>
+          <div className="settings-row-actions">
+            <span className={`status-badge ${info.emailVerified ? "positive" : "warning"}`}>
+              {info.emailVerified ? "인증됨" : "인증 필요"}
+            </span>
+            {!info.emailVerified && info.emailServiceAvailable && (
+              <button className="button outline small" disabled={busy} onClick={resendVerification}>
+                인증 메일 보내기
+              </button>
+            )}
+          </div>
+        </div>
+        {!info.emailVerified && !info.emailServiceAvailable && (
+          <p className="form-note warning">
+            현재 인증 메일을 보낼 수 없습니다. 관리자 설정이 필요합니다.
+          </p>
+        )}
+
+        <div className="settings-row">
+          <div className="settings-row-label">
+            <strong>비밀번호 로그인</strong>
+            <small>{info.hasPassword ? "설정됨" : "설정 안 됨"}</small>
+          </div>
+          <div className="settings-row-actions">
+            <button
+              className="button outline small"
+              disabled={busy}
+              onClick={() => setShowPasswordForm((value) => !value)}
+            >
+              {info.hasPassword ? "변경" : "설정"}
+            </button>
+          </div>
+        </div>
+        {showPasswordForm && (
+          <form onSubmit={submitPasswordChange} className="field-grid compact">
+            {info.hasPassword && (
+              <label>
+                현재 비밀번호
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                />
+              </label>
+            )}
             <label>
-              현재 비밀번호
+              새 비밀번호
               <input
                 type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                minLength={8}
+                placeholder="8자 이상"
                 required
               />
             </label>
-          )}
-          <label>
-            새 비밀번호
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              minLength={8}
-              placeholder="8자 이상"
-              required
-            />
-          </label>
-          <button className="button primary full" type="submit" disabled={busy}>
-            저장
-          </button>
-        </form>
-      )}
-      <div className="menu-row">
-        <span className="menu-icon"><Users size={18} /></span>
-        <span>
-          <strong>Google 로그인</strong>
-          <small>{googleLinked ? "연결됨" : "연결 안 됨"}</small>
-        </span>
-      </div>
-      {googleLinked ? (
-        <button className="button secondary full" disabled={busy} onClick={disconnectGoogle}>
-          Google 연결 해제
-        </button>
-      ) : info.hasPassword ? (
-        showReauth ? (
+            <button className="button primary full" type="submit" disabled={busy}>
+              저장
+            </button>
+          </form>
+        )}
+
+        <div className="settings-row">
+          <div className="settings-row-label">
+            <strong>Google 로그인</strong>
+            <small>{googleLinked ? "연결됨" : "연결 안 됨"}</small>
+          </div>
+          <div className="settings-row-actions">
+            {googleLinked ? (
+              <button className="button outline small" disabled={busy} onClick={disconnectGoogle}>
+                연결 해제
+              </button>
+            ) : info.hasPassword ? (
+              !showReauth && (
+                <button className="button outline small" disabled={busy} onClick={() => setShowReauth(true)}>
+                  연결하기
+                </button>
+              )
+            ) : null}
+          </div>
+        </div>
+        {!googleLinked && !info.hasPassword && (
+          <p className="form-note">비밀번호를 먼저 설정하면 Google 계정을 연결할 수 있어요.</p>
+        )}
+        {!googleLinked && info.hasPassword && showReauth && (
           <form onSubmit={submitReauthAndLink} className="field-grid compact">
             <label>
               비밀번호 확인
@@ -3803,117 +4401,52 @@ function AccountSettingsSection({
               확인하고 Google 연결하기
             </button>
           </form>
-        ) : (
-          <button className="button secondary full" disabled={busy} onClick={() => setShowReauth(true)}>
-            Google 연결하기
-          </button>
-        )
-      ) : (
-        <p className="form-note">비밀번호를 먼저 설정하면 Google 계정을 연결할 수 있어요.</p>
-      )}
+        )}
+      </div>
       {notice && <p className="form-note">{notice}</p>}
       {error && (
         <div className="inline-alert">
           <ShieldAlert size={18} /> {error}
         </div>
       )}
-      <div className="menu-row">
-        <span className="menu-icon"><Trash2 size={18} /></span>
-        <span>
-          <strong>계정 탈퇴</strong>
-          <small>가족 공유에서 자동으로 나가지고, 로그인할 수 없게 돼요</small>
-        </span>
-      </div>
-      <button
-        className="button danger full"
-        disabled={busy}
-        onClick={() => setShowDeleteForm((value) => !value)}
-      >
-        계정 탈퇴
+      <button className="button ghost small" disabled={busy} onClick={onLogout}>
+        로그아웃
       </button>
-      {showDeleteForm && (
-        <form onSubmit={submitDeleteAccount} className="field-grid compact">
-          <p className="form-note warning">
-            탈퇴하면 로그인 정보가 즉시 사라지고 되돌릴 수 없어요. 가족 공유 중이었다면 자동으로
-            나가져요. 이 기기에 저장된 급여·기록 데이터는 지워지지 않으니, 필요하면 설정의
-            내보내기로 먼저 백업해두세요.
-          </p>
-          {info.hasPassword ? (
-            <label>
-              비밀번호 확인
-              <input
-                type="password"
-                value={deletePassword}
-                onChange={(e) => setDeletePassword(e.target.value)}
-                required
-              />
-            </label>
-          ) : (
-            <label>
-              본인 확인을 위해 이메일 주소를 입력해주세요
-              <input
-                type="email"
-                value={deleteConfirmEmail}
-                onChange={(e) => setDeleteConfirmEmail(e.target.value)}
-                placeholder={info.user.email}
-                required
-              />
-            </label>
-          )}
-          <button className="button danger full" type="submit" disabled={busy}>
-            탈퇴 확정
-          </button>
-        </form>
-      )}
-    </div>
+    </section>
   );
 }
 
+// "가족 공유" 카드. 개인 계정 정보(MyAccountSection의 몫)는 여기 섞지
+// 않는다 — 가족 이름/역할/구성원 수/구성원 목록/초대만 다룬다.
 function FamilySharingSection({
   authState,
   household,
   busy,
+  currentUserId,
+  hasPassword,
   onCreate,
-  onJoin,
-  onLeave,
-  onAuthChange,
-  onLogout,
-  onAccountDeleted,
+  onHouseholdChange,
 }: {
   authState: AuthState;
   household: HouseholdInfo | null;
   busy: boolean;
+  currentUserId: string | null;
+  hasPassword: boolean | null;
   onCreate: (name: string) => void;
-  onJoin: (inviteCode: string) => void;
-  onLeave: () => void;
-  onAuthChange: () => void;
-  onLogout: () => void;
-  onAccountDeleted: () => void;
+  onHouseholdChange: () => void;
 }) {
   const [name, setName] = useState("우리 가족");
-  const [code, setCode] = useState("");
-  const [copied, setCopied] = useState(false);
 
-  function copyInviteCode() {
-    if (!household) return;
-    navigator.clipboard?.writeText(household.inviteCode).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    });
-  }
+  if (authState !== "signed-in") return null;
 
   return (
     <section className="form-section">
       <h2><Users size={18} /> 가족 공유</h2>
-      {authState === "checking" && <p className="form-note">로그인 상태를 확인하는 중…</p>}
-      {authState === "signed-out" && <AuthForm onAuthChange={onAuthChange} />}
-      {authState === "signed-in" && (
-        <AccountSettingsSection authState={authState} onAccountDeleted={onAccountDeleted} />
-      )}
-      {authState === "signed-in" && !household && (
+      {!household && (
         <>
           <p className="form-note">
-            아직 공유 중인 가족이 없어요. 새로 만들거나, 다른 가족이 준 초대 코드로 참여하세요.
+            아직 공유 중인 가족이 없어요. 새로 만들면 지금 이 기기의 기록이 공유 데이터의 시작점이
+            돼요. 다른 가족에 합류하려면, 그 가족의 관리자가 이메일로 보내주는 초대 링크를 눌러주세요.
           </p>
           <div className="field-grid">
             <label>
@@ -3928,30 +4461,9 @@ function FamilySharingSection({
           >
             <Users size={18} /> 가족 만들기 (지금 기록으로 시작)
           </button>
-          <div className="field-grid">
-            <label>
-              초대 코드
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase())}
-                placeholder="예: AB12CD"
-              />
-            </label>
-          </div>
-          <button
-            className="button secondary full"
-            disabled={busy || !code.trim()}
-            onClick={() => onJoin(code.trim())}
-          >
-            초대 코드로 참여하기
-          </button>
-          <p className="form-note">
-            가족을 만들면 지금 이 기기의 기록이 그대로 공유 데이터의 시작점이 되고, 초대 코드로
-            참여하면 그 가족의 기존 기록으로 이 기기 내용이 바뀌어요.
-          </p>
         </>
       )}
-      {authState === "signed-in" && household && (
+      {household && (
         <>
           <div className="plan-preview">
             <div>
@@ -3959,36 +4471,596 @@ function FamilySharingSection({
               <strong>{household.name}</strong>
             </div>
             <div>
-              <span>초대 코드</span>
-              <strong className="invite-code">{household.inviteCode}</strong>
+              <span>내 역할</span>
+              <strong>{household.role === "owner" ? "관리자" : "구성원"}</strong>
+            </div>
+            <div>
+              <span>구성원 수</span>
+              <strong>{household.members.length}명</strong>
             </div>
           </div>
-          <button className="button secondary full" onClick={copyInviteCode}>
-            <Copy size={18} /> {copied ? "복사했어요" : "초대 코드 복사"}
-          </button>
+          <HouseholdMembersPanel
+            household={household}
+            busy={busy}
+            currentUserId={currentUserId}
+            hasPassword={hasPassword}
+            onHouseholdChange={onHouseholdChange}
+          />
+          <p className="form-note">
+            다른 가족 구성원이 기록을 바꾸면 몇 초 안에 이 화면에도 자동으로 반영돼요.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// 초대 발송/취소/재발송(owner 전용) + 구성원 목록 + 구성원 제거/소유권
+// 이전을 한 곳에 모은 패널. household가 바뀌면(합류/탈퇴 등) 초대 목록을
+// 다시 불러온다.
+function HouseholdMembersPanel({
+  household,
+  busy,
+  currentUserId,
+  hasPassword,
+  onHouseholdChange,
+}: {
+  household: HouseholdInfo;
+  busy: boolean;
+  currentUserId: string | null;
+  hasPassword: boolean | null;
+  onHouseholdChange: () => void;
+}) {
+  const isOwner = household.role === "owner";
+  const [invitations, setInvitations] = useState<HouseholdInvitation[] | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteNotice, setInviteNotice] = useState("");
+  const [memberBusyId, setMemberBusyId] = useState<string | null>(null);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferTarget, setTransferTarget] = useState("");
+  const [transferPassword, setTransferPassword] = useState("");
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferError, setTransferError] = useState("");
+
+  const invitationStatusLabel: Record<HouseholdInvitation["status"], string> = {
+    pending: "발송 준비 중",
+    sent_pending: "응답 대기 중",
+    expired: "만료됨",
+    cancelled: "취소됨",
+    accepted: "수락됨",
+  };
+
+  async function loadInvitations() {
+    if (!isOwner) return;
+    try {
+      const res = await fetch("/api/household/invitations");
+      if (!res.ok) return;
+      const payload = (await res.json()) as { invitations: HouseholdInvitation[] };
+      setInvitations(payload.invitations);
+    } catch {
+      // 초대 목록을 못 불러와도 나머지 화면은 정상 동작해야 한다.
+    }
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setInvitations(null);
+    if (isOwner) loadInvitations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [household.id, isOwner]);
+
+  async function sendInvite(event: FormEvent) {
+    event.preventDefault();
+    setInviteBusy(true);
+    setInviteNotice("");
+    try {
+      const res = await fetch("/api/household/invitations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail.trim() }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setInviteNotice(payload.error ?? "초대를 보내지 못했어요.");
+        return;
+      }
+      setInviteEmail("");
+      setInviteNotice("초대 이메일을 보냈어요.");
+      await loadInvitations();
+    } catch {
+      setInviteNotice("네트워크 오류로 초대를 보내지 못했어요.");
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function cancelInvite(id: string) {
+    setInviteBusy(true);
+    try {
+      await fetch("/api/household/invitations/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invitationId: id }),
+      });
+      await loadInvitations();
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function resendInvite(id: string) {
+    setInviteBusy(true);
+    setInviteNotice("");
+    try {
+      const res = await fetch("/api/household/invitations/resend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invitationId: id }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setInviteNotice(payload.error ?? "재발송하지 못했어요.");
+        return;
+      }
+      setInviteNotice("초대를 다시 보냈어요. 이전 링크는 더 이상 쓸 수 없어요.");
+      await loadInvitations();
+    } catch {
+      setInviteNotice("네트워크 오류로 재발송하지 못했어요.");
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function removeMember(userId: string) {
+    if (!window.confirm("이 구성원을 가족에서 제거할까요? 제거되면 곧바로 공유 데이터에 접근할 수 없게 돼요.")) return;
+    setMemberBusyId(userId);
+    try {
+      const res = await fetch("/api/household/remove-member", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetUserId: userId }),
+      });
+      if (res.ok) onHouseholdChange();
+    } finally {
+      setMemberBusyId(null);
+    }
+  }
+
+  function startGoogleReauthForTransfer() {
+    window.location.href =
+      "/api/auth/google/start?mode=reauth&next=" + encodeURIComponent("/?reauthDone=ownership-transfer");
+  }
+
+  async function submitTransfer(event: FormEvent) {
+    event.preventDefault();
+    if (!transferTarget) {
+      setTransferError("이전할 구성원을 선택해주세요.");
+      return;
+    }
+    setTransferBusy(true);
+    setTransferError("");
+    try {
+      const res = await fetch("/api/household/transfer-ownership", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetUserId: transferTarget, password: transferPassword }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setTransferError(payload.error ?? "소유권을 이전하지 못했어요.");
+        return;
+      }
+      setShowTransfer(false);
+      setTransferPassword("");
+      setTransferTarget("");
+      onHouseholdChange();
+    } catch {
+      setTransferError("네트워크 오류가 발생했어요.");
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  const otherMembers = household.members.filter((m) => m.role !== "owner");
+
+  return (
+    <div className="menu-group">
+      {isOwner && (
+        <>
+          <h3>구성원 초대</h3>
+          <form onSubmit={sendInvite} className="field-grid compact">
+            <label>
+              초대할 이메일
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="family@example.com"
+                required
+              />
+            </label>
+            <button className="button outline small" type="submit" disabled={inviteBusy}>
+              <Mail size={18} /> 초대 이메일 보내기
+            </button>
+          </form>
+          {inviteNotice && <p className="form-note">{inviteNotice}</p>}
+        </>
+      )}
+
+      {household.members.map((member) => {
+        const isMe = Boolean(currentUserId && member.userId === currentUserId);
+        return (
+          <div className="menu-row with-actions" key={member.userId ?? member.email}>
+            <span className="menu-icon"><Users size={18} /></span>
+            <span>
+              <strong>
+                {member.displayName ?? member.email} {isMe && <span className="status-badge">나</span>}
+              </strong>
+              <small>{member.email}</small>
+              <small>{member.role === "owner" ? "관리자" : "구성원"}</small>
+            </span>
+            <span className="menu-row-actions">
+              {isOwner && member.role === "member" && member.userId && (
+                <button
+                  className="button outline small"
+                  disabled={busy || memberBusyId === member.userId}
+                  onClick={() => removeMember(member.userId!)}
+                >
+                  제거
+                </button>
+              )}
+            </span>
+          </div>
+        );
+      })}
+
+      {isOwner && invitations && invitations.length > 0 && (
+        <>
+          <h3>초대 현황</h3>
           <div className="menu-group">
-            {household.members.map((member) => (
-              <div className="menu-row" key={member.email}>
-                <span className="menu-icon"><Users size={18} /></span>
+            {invitations.map((inv) => (
+              <div className="menu-row with-actions" key={inv.id}>
+                <span className="menu-icon"><Mail size={18} /></span>
                 <span>
-                  <strong>{member.displayName ?? member.email}</strong>
-                  <small>{member.role === "owner" ? "만든 사람" : "구성원"}</small>
+                  <strong>{inv.email}</strong>
+                  <small>{invitationStatusLabel[inv.status]}</small>
+                </span>
+                <span className="menu-row-actions">
+                  {(inv.status === "sent_pending" || inv.status === "pending" || inv.status === "expired") && (
+                    <>
+                      <button className="button outline small" disabled={inviteBusy} onClick={() => resendInvite(inv.id)}>
+                        재발송
+                      </button>
+                      <button className="button outline small" disabled={inviteBusy} onClick={() => cancelInvite(inv.id)}>
+                        취소
+                      </button>
+                    </>
+                  )}
                 </span>
               </div>
             ))}
           </div>
-          <p className="form-note">
-            다른 가족이 기록을 바꾸면 몇 초 안에 이 화면에도 자동으로 반영돼요.
-          </p>
-          <button className="button danger full" disabled={busy} onClick={onLeave}>
-            <LogOut size={18} /> 가족 공유 나가기
-          </button>
         </>
       )}
-      {authState === "signed-in" && (
-        <button className="button secondary full" onClick={onLogout}>
-          <LogOut size={18} /> 로그아웃
-        </button>
+
+      {isOwner && otherMembers.length > 0 && (
+        <>
+          <h3>소유권 이전</h3>
+          <button className="button outline small" onClick={() => setShowTransfer(true)}>
+            <ShieldAlert size={18} /> 다른 구성원에게 소유권 이전하기
+          </button>
+          {showTransfer && (
+            <ConfirmDialog title="소유권 이전" onClose={() => setShowTransfer(false)}>
+              <form onSubmit={submitTransfer} className="field-grid compact">
+                <label>
+                  새 관리자
+                  <select value={transferTarget} onChange={(e) => setTransferTarget(e.target.value)} required>
+                    <option value="">선택해주세요</option>
+                    {otherMembers.map((m) => (
+                      <option key={m.userId ?? m.email} value={m.userId ?? ""}>
+                        {m.displayName ?? m.email}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {hasPassword ? (
+                  <label>
+                    본인 비밀번호 확인
+                    <input
+                      type="password"
+                      value={transferPassword}
+                      onChange={(e) => setTransferPassword(e.target.value)}
+                      required
+                    />
+                  </label>
+                ) : (
+                  <>
+                    <p className="form-note">
+                      비밀번호가 없는 계정이라, 연결된 Google 계정으로 다시 로그인해서 본인임을
+                      확인해야 해요.
+                    </p>
+                    <button className="button secondary full" type="button" onClick={startGoogleReauthForTransfer}>
+                      Google로 본인 확인하기
+                    </button>
+                  </>
+                )}
+                {transferError && (
+                  <div className="inline-alert">
+                    <ShieldAlert size={18} /> {transferError}
+                  </div>
+                )}
+                <button className="button primary full" type="submit" disabled={transferBusy}>
+                  이전 확정
+                </button>
+              </form>
+            </ConfirmDialog>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// 위험 영역: 가족 나가기(또는 혼자 남은 owner의 가족 공간 삭제), 계정
+// 탈퇴, 이 기기 데이터 초기화를 한 카드에 모은다. 각 작업은 작은
+// destructive outline 버튼으로만 노출하고, 실제 확정은 ConfirmDialog
+// 안에서만 이뤄진다. 서버 쪽 권한 검사(소유권 이전 전 탈퇴 차단, 유일한
+// 로그인 수단 보호 등)는 그대로 유지되며 이 컴포넌트는 그 결과를 안내만
+// 한다 — UI를 숨기는 것으로 권한을 대신하지 않는다.
+function DangerZoneSection({
+  household,
+  accountInfo,
+  busy,
+  onLeave,
+  onHouseholdChange,
+  onAccountDeleted,
+  updateDb,
+}: {
+  household: HouseholdInfo | null;
+  accountInfo: AccountInfo | null;
+  busy: boolean;
+  onLeave: () => void;
+  onHouseholdChange: () => void;
+  onAccountDeleted: () => void;
+  updateDb: (updater: (current: Database) => Database, message?: string) => void;
+}) {
+  const [openDialog, setOpenDialog] = useState<null | "delete-household" | "delete-account" | "reset-local">(null);
+  const [password, setPassword] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const hasPassword = accountInfo?.hasPassword ?? null;
+  const isOwner = household?.role === "owner";
+  const isSoleOwner = isOwner && household.members.length <= 1;
+  const isOwnerBlocked = isOwner && household.members.length > 1;
+
+  function closeDialog() {
+    setOpenDialog(null);
+    setPassword("");
+    setError("");
+  }
+
+  function startGoogleReauth(next: string) {
+    window.location.href = "/api/auth/google/start?mode=reauth&next=" + encodeURIComponent(next);
+  }
+
+  async function submitDeleteHousehold(event: FormEvent) {
+    event.preventDefault();
+    setDeleteBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/household/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "가족 공간을 삭제하지 못했어요.");
+        return;
+      }
+      closeDialog();
+      onHouseholdChange();
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  async function submitDeleteAccount(event: FormEvent) {
+    event.preventDefault();
+    setDeleteBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/delete-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(hasPassword ? { password } : {}),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "탈퇴하지 못했어요.");
+        return;
+      }
+      closeDialog();
+      onAccountDeleted();
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  function submitResetLocal() {
+    updateDb(() => emptyDatabase(), "모든 데이터를 초기화했어요.");
+    closeDialog();
+  }
+
+  return (
+    <section className="form-section danger-zone">
+      <h2>위험 영역</h2>
+
+      {household && (
+        <div className="settings-row">
+          <div className="settings-row-label">
+            <strong>가족 나가기</strong>
+            <small>
+              {isOwnerBlocked
+                ? "먼저 다른 구성원에게 소유권을 이전해야 나갈 수 있어요"
+                : isSoleOwner
+                  ? "혼자 남은 관리자예요. 나가려면 가족 공간 자체를 삭제해야 해요"
+                  : "가족 공유 기록은 그대로 남고, 이 계정만 가족에서 빠져요"}
+            </small>
+          </div>
+          <div className="settings-row-actions">
+            {isOwnerBlocked ? null : isSoleOwner ? (
+              <button className="button danger-outline small" disabled={busy} onClick={() => setOpenDialog("delete-household")}>
+                가족 공간 삭제
+              </button>
+            ) : (
+              <button className="button danger-outline small" disabled={busy} onClick={onLeave}>
+                가족 나가기
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="settings-row">
+        <div className="settings-row-label">
+          <strong>계정 탈퇴</strong>
+          <small>
+            {isOwnerBlocked
+              ? "먼저 다른 구성원에게 소유권을 이전해야 탈퇴할 수 있어요"
+              : isSoleOwner
+                ? "이 가족의 이름·공유 기록·초대 내역도 함께 영구히 삭제돼요"
+                : household
+                  ? "가족의 공유 기록은 남고, 이 계정의 로그인 정보만 사라져요"
+                  : "로그인할 수 없게 되고, 되돌릴 수 없어요"}
+          </small>
+        </div>
+        <div className="settings-row-actions">
+          {!isOwnerBlocked && (
+            <button className="button danger-outline small" disabled={busy} onClick={() => setOpenDialog("delete-account")}>
+              계정 탈퇴
+            </button>
+          )}
+        </div>
+      </div>
+      {isOwnerBlocked && (
+        <p className="form-note warning">
+          지금은 이 가족의 관리자예요. 다른 구성원이 있는 동안에는 나가거나 탈퇴할 수 없어요. 먼저
+          위쪽 가족 공유 화면에서 다른 구성원에게 소유권을 이전해주세요.
+        </p>
+      )}
+
+      <div className="settings-row">
+        <div className="settings-row-label">
+          <strong>이 기기 데이터 초기화</strong>
+          <small>반려동물 프로필을 포함해 이 브라우저의 모든 기록이 지워져요</small>
+        </div>
+        <div className="settings-row-actions">
+          <button className="button danger-outline small" onClick={() => setOpenDialog("reset-local")}>
+            초기화
+          </button>
+        </div>
+      </div>
+
+      {openDialog === "delete-household" && (
+        <ConfirmDialog title="가족 공간 삭제" onClose={closeDialog}>
+          <form onSubmit={submitDeleteHousehold} className="field-grid compact">
+            <p className="form-note warning">
+              가족 공간을 삭제하면 가족 이름·공유 기록·초대 내역이 모두 영구히 사라져요. 이 기기에
+              저장된 데이터는 지워지지 않으니, 필요하면 데이터 관리의 내보내기로 먼저 백업해두세요.
+            </p>
+            {hasPassword ? (
+              <label>
+                본인 비밀번호 확인
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </label>
+            ) : (
+              <>
+                <p className="form-note">
+                  비밀번호가 없는 계정이라, 연결된 Google 계정으로 다시 로그인해서 본인임을 확인해야
+                  해요.
+                </p>
+                <button
+                  className="button secondary full"
+                  type="button"
+                  onClick={() => startGoogleReauth("/?reauthDone=household-delete")}
+                >
+                  Google로 본인 확인하기
+                </button>
+              </>
+            )}
+            {error && (
+              <div className="inline-alert">
+                <ShieldAlert size={18} /> {error}
+              </div>
+            )}
+            <button className="button danger full" type="submit" disabled={deleteBusy}>
+              가족 공간 삭제 확정
+            </button>
+          </form>
+        </ConfirmDialog>
+      )}
+
+      {openDialog === "delete-account" && (
+        <ConfirmDialog title="계정 탈퇴" onClose={closeDialog}>
+          <form onSubmit={submitDeleteAccount} className="field-grid compact">
+            <p className="form-note warning">
+              {isSoleOwner
+                ? "탈퇴하면 로그인 정보와 함께 이 가족의 이름·공유 기록·초대 내역까지 모두 영구히 삭제돼요. 되돌릴 수 없어요."
+                : household
+                  ? "탈퇴하면 로그인 정보가 즉시 사라져요. 가족 공유 기록은 그대로 남아 다른 구성원이 계속 사용해요."
+                  : "탈퇴하면 로그인 정보가 즉시 사라지고 되돌릴 수 없어요."}
+              {" "}이 기기에 저장된 급여·기록 데이터는 지워지지 않으니, 필요하면 데이터 관리의
+              내보내기로 먼저 백업해두세요.
+            </p>
+            {hasPassword ? (
+              <label>
+                비밀번호 확인
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </label>
+            ) : (
+              <>
+                <p className="form-note">
+                  비밀번호가 없는 계정이라, 이메일 재입력 대신 연결된 Google 계정으로 다시 로그인해서
+                  본인임을 확인해야 해요.
+                </p>
+                <button
+                  className="button secondary full"
+                  type="button"
+                  onClick={() => startGoogleReauth("/?reauthDone=account-delete")}
+                >
+                  Google로 본인 확인하기
+                </button>
+              </>
+            )}
+            {error && (
+              <div className="inline-alert">
+                <ShieldAlert size={18} /> {error}
+              </div>
+            )}
+            <button className="button danger full" type="submit" disabled={deleteBusy}>
+              탈퇴 확정
+            </button>
+          </form>
+        </ConfirmDialog>
+      )}
+
+      {openDialog === "reset-local" && (
+        <ConfirmDialog title="이 기기 데이터 초기화" onClose={closeDialog}>
+          <p className="form-note warning">
+            모든 기록을 초기화할까요? 반려동물 프로필을 포함해 완전히 빈 상태가 되며, 되돌릴 수
+            없습니다.
+          </p>
+          <button className="button danger full" onClick={submitResetLocal}>
+            <Trash2 size={18} /> 초기화 확정
+          </button>
+        </ConfirmDialog>
       )}
     </section>
   );

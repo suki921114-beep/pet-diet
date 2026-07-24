@@ -17,6 +17,14 @@ export function getAppUrl(): string {
   return process.env.APP_URL?.trim() || "http://localhost:3000";
 }
 
+// 실제로 보내보기 전에 "보낼 수 있는 상태인지"만 조회하는 용도. 인증 메일
+// 버튼을 미리 숨기거나 비활성화할 때 쓴다 — 값 자체(키, 발신 주소)는
+// 클라이언트에 절대 노출하지 않고 boolean만 돌려준다.
+export function isEmailServiceConfigured(): boolean {
+  const { apiKey, from } = getResendConfig();
+  return Boolean(apiKey && from);
+}
+
 async function sendEmail(to: string, subject: string, html: string): Promise<SendEmailResult> {
   const { apiKey, from } = getResendConfig();
   if (!apiKey || !from) {
@@ -61,5 +69,19 @@ export async function sendPasswordResetEmail(to: string, rawToken: string): Prom
     to,
     "비밀번호 재설정",
     `<p>안녕하세요.</p><p>아래 링크를 눌러 비밀번호를 재설정해주세요. 이 링크는 30분 동안만 유효해요.</p><p><a href="${url}">${url}</a></p><p>본인이 요청하지 않았다면 이 메일을 무시해도 괜찮아요. 비밀번호는 바뀌지 않아요.</p>`,
+  );
+}
+
+export async function sendHouseholdInviteEmail(
+  to: string,
+  rawToken: string,
+  inviterLabel: string,
+  householdName: string,
+): Promise<SendEmailResult> {
+  const url = `${getAppUrl()}/invite/accept?token=${encodeURIComponent(rawToken)}`;
+  return sendEmail(
+    to,
+    `${inviterLabel}님이 "${householdName}" 가족 공유에 초대했어요`,
+    `<p>안녕하세요.</p><p>${inviterLabel}님이 "${householdName}" 가족 공유에 초대했어요. 아래 링크를 눌러 초대를 수락해주세요. 이 링크는 7일 동안만 유효하고, 한 번만 사용할 수 있어요.</p><p><a href="${url}">${url}</a></p><p>본인이 예상하지 못한 초대라면 이 메일을 무시해도 괜찮아요.</p>`,
   );
 }

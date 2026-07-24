@@ -59,3 +59,15 @@ export async function consumeAuthToken(
 
   return { userId: row.userId, email: row.email };
 }
+
+// 토큰을 발급했지만(예: 메일 발송이 실패해서) 실제로 전달되지 못한 경우,
+// 아무도 받지 못한 채로 "아직 쓰이지 않은" 유효한 인증 링크가 DB에 남아있지
+// 않도록 즉시 사용 처리한다. 원본 토큰이나 해시를 로그에 남기지 않는다.
+export async function invalidateAuthToken(rawToken: string): Promise<void> {
+  const database = await getReadyDb();
+  const tokenHash = hashToken(rawToken);
+  await database
+    .update(authTokens)
+    .set({ usedAt: new Date().toISOString() })
+    .where(and(eq(authTokens.tokenHash, tokenHash), isNull(authTokens.usedAt)));
+}
