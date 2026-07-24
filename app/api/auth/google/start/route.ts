@@ -17,6 +17,7 @@ type Handshake = {
   next: string;
   linkUserId: string | null;
   redirectUri: string;
+  agreed: boolean;
 };
 
 export async function GET(request: NextRequest) {
@@ -31,6 +32,9 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const mode: "signin" | "link" = url.searchParams.get("mode") === "link" ? "link" : "signin";
   const next = safeInternalPath(url.searchParams.get("next"));
+  // 회원가입 탭에서 약관 체크박스를 켠 채로 눌렀을 때만 "1"로 전달된다.
+  // 콜백에서 신규 계정을 만드는 순간에만 이 값을 확인한다(로그인/연결에는 불필요).
+  const agreed = url.searchParams.get("agreed") === "1";
 
   let linkUserId: string | null = null;
   if (mode === "link") {
@@ -65,6 +69,7 @@ export async function GET(request: NextRequest) {
     next,
     linkUserId,
     redirectUri,
+    agreed,
   };
 
   const response = NextResponse.redirect(authStart.authorizationUrl);

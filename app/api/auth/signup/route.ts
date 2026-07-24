@@ -5,6 +5,7 @@ import { getReadyDb } from "@/db";
 import { authAccounts, users } from "@/db/schema";
 import { createSession, hashPassword, sessionCookieOptions, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { createAuthToken } from "@/lib/authTokens";
+import { recordSignupConsent } from "@/lib/consent";
 import { sendVerificationEmail } from "@/lib/email";
 import { checkRateLimit, clientIpFrom, rateLimitMessage } from "@/lib/rateLimit";
 
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: rateLimitMessage() }, { status: 429 });
   }
 
-  let body: { email?: string; password?: string; displayName?: string };
+  let body: { email?: string; password?: string; displayName?: string; agreed?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -34,6 +35,12 @@ export async function POST(request: Request) {
   }
   if (password.length < 8) {
     return NextResponse.json({ error: "비밀번호는 8자 이상이어야 해요." }, { status: 400 });
+  }
+  if (!body.agreed) {
+    return NextResponse.json(
+      { error: "이용약관과 개인정보처리방침에 동의해주세요." },
+      { status: 400 },
+    );
   }
 
   const database = await getReadyDb();
@@ -50,6 +57,7 @@ export async function POST(request: Request) {
   const passwordHash = await hashPassword(password);
   await database.insert(users).values({ id, email, passwordHash, displayName });
   await database.insert(authAccounts).values({ id: randomUUID(), userId: id, provider: "password" });
+  await recordSignupConsent(id);
 
   // 인증 메일 발송은 회원가입 성공 여부와 무관하다. 발송에 실패해도(예: 이메일
   // 서비스 미설정) 계정은 그대로 만들어지고, 클라이언트에 그 사실만 알려준다.

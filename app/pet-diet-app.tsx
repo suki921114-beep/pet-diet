@@ -1045,6 +1045,7 @@ export default function PetDietApp() {
       google_email_in_use: "이미 같은 이메일로 가입된 계정이 있어요. 비밀번호로 로그인한 뒤 계정 설정에서 Google을 연결해주세요.",
       google_already_linked: "이 Google 계정은 이미 다른 계정에 연결되어 있어요.",
       account_unavailable: "이용할 수 없는 계정이에요.",
+      consent_required: "Google로 처음 가입하려면 회원가입 탭에서 약관에 동의한 뒤 다시 시도해주세요.",
     };
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setToast(
@@ -1148,6 +1149,14 @@ export default function PetDietApp() {
     setHousehold(null);
     setAuthState("signed-out");
     setToast("로그아웃했어요.");
+  }
+
+  // 계정 탈퇴 API가 이미 세션 쿠키를 지웠으므로 여기서는 로그아웃 요청을
+  // 다시 보내지 않고, 화면 상태만 로그아웃 상태로 되돌린다.
+  function handleAccountDeleted() {
+    setHousehold(null);
+    setAuthState("signed-out");
+    setToast("계정을 삭제했어요.");
   }
 
   function open(next: Page) {
@@ -1629,6 +1638,7 @@ export default function PetDietApp() {
           leaveHousehold={leaveHousehold}
           refreshHousehold={refreshHousehold}
           logout={logout}
+          onAccountDeleted={handleAccountDeleted}
         />
       );
   }
@@ -3462,6 +3472,7 @@ function SettingsPage({
   leaveHousehold,
   refreshHousehold,
   logout,
+  onAccountDeleted,
 }: SharedProps & {
   exportData: () => void;
   importRef: React.RefObject<HTMLInputElement | null>;
@@ -3474,6 +3485,7 @@ function SettingsPage({
   leaveHousehold: () => void;
   refreshHousehold: () => void;
   logout: () => void;
+  onAccountDeleted: () => void;
 }) {
   return (
     <>
@@ -3498,6 +3510,7 @@ function SettingsPage({
           onLeave={leaveHousehold}
           onAuthChange={refreshHousehold}
           onLogout={logout}
+          onAccountDeleted={onAccountDeleted}
         />
         <section className="form-section danger-zone">
           <h2>전체 초기화</h2>
@@ -3516,11 +3529,18 @@ type AccountInfo = {
   emailVerified: boolean;
   hasPassword: boolean;
   providers: string[];
+  consent: { upToDate: boolean };
 };
 
 // 로그인 방법(비밀번호/Google), 이메일 인증 상태를 보여주고 바꿀 수 있는
 // 영역. household(가족)와는 별개로 /api/auth/me에서 정보를 가져온다.
-function AccountSettingsSection({ authState }: { authState: AuthState }) {
+function AccountSettingsSection({
+  authState,
+  onAccountDeleted,
+}: {
+  authState: AuthState;
+  onAccountDeleted: () => void;
+}) {
   const [info, setInfo] = useState<AccountInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -3530,6 +3550,9 @@ function AccountSettingsSection({ authState }: { authState: AuthState }) {
   const [newPassword, setNewPassword] = useState("");
   const [showReauth, setShowReauth] = useState(false);
   const [reauthPassword, setReauthPassword] = useState("");
+  const [showDeleteForm, setShowDeleteForm] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState("");
 
   async function loadInfo() {
     try {
@@ -3640,12 +3663,64 @@ function AccountSettingsSection({ authState }: { authState: AuthState }) {
     }
   }
 
+  async function reconfirmConsent() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/auth/consent", { method: "POST" });
+      if (!res.ok) {
+        setError("처리하지 못했어요. 다시 시도해주세요.");
+        return;
+      }
+      setNotice("다시 동의했어요.");
+      loadInfo();
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitDeleteAccount(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/delete-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          info?.hasPassword ? { password: deletePassword } : { confirmEmail: deleteConfirmEmail },
+        ),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "탈퇴하지 못했어요.");
+        setBusy(false);
+        return;
+      }
+      onAccountDeleted();
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+      setBusy(false);
+    }
+  }
+
   if (authState !== "signed-in" || !info) return null;
 
   const googleLinked = info.providers.includes("google");
 
   return (
     <div className="menu-group">
+      {!info.consent.upToDate && (
+        <div className="inline-alert">
+          <ShieldAlert size={18} /> 이용약관 또는 개인정보처리방침이 업데이트됐어요.
+          <button className="button secondary" type="button" disabled={busy} onClick={reconfirmConsent}>
+            확인했어요(재동의)
+          </button>
+        </div>
+      )}
       <div className="menu-row">
         <span className="menu-icon"><Mail size={18} /></span>
         <span>
@@ -3742,6 +3817,54 @@ function AccountSettingsSection({ authState }: { authState: AuthState }) {
           <ShieldAlert size={18} /> {error}
         </div>
       )}
+      <div className="menu-row">
+        <span className="menu-icon"><Trash2 size={18} /></span>
+        <span>
+          <strong>계정 탈퇴</strong>
+          <small>가족 공유에서 자동으로 나가지고, 로그인할 수 없게 돼요</small>
+        </span>
+      </div>
+      <button
+        className="button danger full"
+        disabled={busy}
+        onClick={() => setShowDeleteForm((value) => !value)}
+      >
+        계정 탈퇴
+      </button>
+      {showDeleteForm && (
+        <form onSubmit={submitDeleteAccount} className="field-grid compact">
+          <p className="form-note warning">
+            탈퇴하면 로그인 정보가 즉시 사라지고 되돌릴 수 없어요. 가족 공유 중이었다면 자동으로
+            나가져요. 이 기기에 저장된 급여·기록 데이터는 지워지지 않으니, 필요하면 설정의
+            내보내기로 먼저 백업해두세요.
+          </p>
+          {info.hasPassword ? (
+            <label>
+              비밀번호 확인
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                required
+              />
+            </label>
+          ) : (
+            <label>
+              본인 확인을 위해 이메일 주소를 입력해주세요
+              <input
+                type="email"
+                value={deleteConfirmEmail}
+                onChange={(e) => setDeleteConfirmEmail(e.target.value)}
+                placeholder={info.user.email}
+                required
+              />
+            </label>
+          )}
+          <button className="button danger full" type="submit" disabled={busy}>
+            탈퇴 확정
+          </button>
+        </form>
+      )}
     </div>
   );
 }
@@ -3755,6 +3878,7 @@ function FamilySharingSection({
   onLeave,
   onAuthChange,
   onLogout,
+  onAccountDeleted,
 }: {
   authState: AuthState;
   household: HouseholdInfo | null;
@@ -3764,6 +3888,7 @@ function FamilySharingSection({
   onLeave: () => void;
   onAuthChange: () => void;
   onLogout: () => void;
+  onAccountDeleted: () => void;
 }) {
   const [name, setName] = useState("우리 가족");
   const [code, setCode] = useState("");
@@ -3782,7 +3907,9 @@ function FamilySharingSection({
       <h2><Users size={18} /> 가족 공유</h2>
       {authState === "checking" && <p className="form-note">로그인 상태를 확인하는 중…</p>}
       {authState === "signed-out" && <AuthForm onAuthChange={onAuthChange} />}
-      {authState === "signed-in" && <AccountSettingsSection authState={authState} />}
+      {authState === "signed-in" && (
+        <AccountSettingsSection authState={authState} onAccountDeleted={onAccountDeleted} />
+      )}
       {authState === "signed-in" && !household && (
         <>
           <p className="form-note">
@@ -3875,6 +4002,7 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [agreed, setAgreed] = useState(false);
 
   function switchMode(next: "login" | "signup" | "forgot") {
     setMode(next);
@@ -3902,11 +4030,15 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
         setNotice(payload.message ?? "해당 이메일로 가입된 계정이 있다면, 재설정 링크를 보냈어요.");
         return;
       }
+      if (mode === "signup" && !agreed) {
+        setError("이용약관과 개인정보처리방침에 동의해주세요.");
+        return;
+      }
       const res = await fetch(mode === "login" ? "/api/auth/login" : "/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          mode === "login" ? { email, password } : { email, password, displayName },
+          mode === "login" ? { email, password } : { email, password, displayName, agreed },
         ),
       });
       const payload = (await res.json()) as { error?: string; emailVerificationSent?: boolean };
@@ -3930,7 +4062,15 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
   }
 
   function continueWithGoogle() {
-    window.location.href = "/api/auth/google/start?next=%2F";
+    // 회원가입 탭에서는 체크박스에 동의해야만 진행할 수 있다(신규 계정
+    // 생성 시 서버가 이 값을 다시 확인한다). 로그인 탭에서는 이미 있는
+    // 계정으로 로그인하는 것이므로 동의 여부와 무관하게 진행한다.
+    if (mode === "signup" && !agreed) {
+      setError("이용약관과 개인정보처리방침에 동의해주세요.");
+      return;
+    }
+    const agreedParam = mode === "signup" && agreed ? "1" : "0";
+    window.location.href = `/api/auth/google/start?next=%2F&agreed=${agreedParam}`;
   }
 
   return (
@@ -3980,6 +4120,21 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
             minLength={mode === "signup" ? 8 : undefined}
             required
           />
+        </label>
+      )}
+      {mode === "signup" && (
+        <label className="check-label">
+          <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} required />
+          <span>
+            <a href="/terms" target="_blank" rel="noreferrer">
+              이용약관
+            </a>
+            {" 및 "}
+            <a href="/privacy" target="_blank" rel="noreferrer">
+              개인정보처리방침
+            </a>
+            에 동의합니다 (필수)
+          </span>
         </label>
       )}
       {notice && <p className="form-note">{notice}</p>}

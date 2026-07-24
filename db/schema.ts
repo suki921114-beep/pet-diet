@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // 이메일+비밀번호 또는 Google로 로그인하는 개인 계정.
 // password_hash는 컬럼 자체는 NOT NULL로 유지하되(운영 중인 SQLite 테이블의
@@ -83,6 +83,21 @@ export const rateLimitHits = sqliteTable("rate_limit_hits", {
   key: text("key").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+// 약관/개인정보처리방침 동의 기록. 덮어쓰지 않고 매번 새 행을 추가하는
+// append-only 로그다 — "언제, 어떤 버전에" 동의했는지 이력이 통째로 남아야
+// 하고(생애주기 추적, 감사 대응), 최신 상태는 kind별로 가장 최근 행을 보면 된다.
+export const userConsents = sqliteTable(
+  "user_consents",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(), // "terms" | "privacy"
+    version: text("version").notNull(),
+    consentedAt: text("consented_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("user_consents_user_kind_idx").on(table.userId, table.kind)],
+);
 
 // 가족(household) 하나가 반려동물 데이터 한 벌을 공유한다.
 // 클라이언트가 쓰던 단일 JSON(Database) 구조를 그대로 data 컬럼에 저장해서

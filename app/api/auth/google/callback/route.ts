@@ -12,6 +12,7 @@ import {
   verifyPayload,
   verifyReauthToken,
 } from "@/lib/auth";
+import { recordSignupConsent } from "@/lib/consent";
 import { exchangeGoogleCallback } from "@/lib/googleOAuth";
 import { safeInternalPath } from "@/lib/redirect";
 
@@ -27,6 +28,7 @@ type Handshake = {
   next: string;
   linkUserId: string | null;
   redirectUri: string;
+  agreed: boolean;
 };
 
 function errorRedirect(request: NextRequest, code: string) {
@@ -126,6 +128,12 @@ export async function GET(request: NextRequest) {
     if (existingUserByEmail) {
       return errorRedirect(request, "google_email_in_use");
     }
+    // 새 계정을 만드는 경우에만 동의 여부를 확인한다. "로그인" 탭에서 눌러도
+    // 여기까지 왔다는 건 아직 계정이 없다는 뜻이라, 동의 없이는 계정을
+    // 만들지 않는다(회원가입 탭에서 체크박스를 켠 채로 다시 시도해야 함).
+    if (!handshake.agreed) {
+      return errorRedirect(request, "consent_required");
+    }
 
     const newUserId = randomUUID();
     await database.insert(users).values({
@@ -141,6 +149,7 @@ export async function GET(request: NextRequest) {
       provider: "google",
       providerSubject: identity.sub,
     });
+    await recordSignupConsent(newUserId);
     userId = newUserId;
   }
 

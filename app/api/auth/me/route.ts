@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getReadyDb } from "@/db";
 import { authAccounts, users } from "@/db/schema";
 import { getSessionUser, hasPassword } from "@/lib/auth";
+import { getConsentStatus } from "@/lib/consent";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +26,13 @@ export async function GET() {
     .select({ provider: authAccounts.provider })
     .from(authAccounts)
     .where(eq(authAccounts.userId, user.id));
+  const consent = await getConsentStatus(user.id);
 
   return NextResponse.json({
     user,
     emailVerified: Boolean(row?.emailVerifiedAt),
     hasPassword: hasPassword(row?.passwordHash ?? ""),
     providers: accounts.map((a) => a.provider),
+    consent,
   });
 }

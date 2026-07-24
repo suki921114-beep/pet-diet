@@ -113,6 +113,14 @@ export async function getReadyDb() {
           key text NOT NULL,
           created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
         )`,
+        `CREATE TABLE IF NOT EXISTS user_consents (
+          id text PRIMARY KEY NOT NULL,
+          user_id text NOT NULL,
+          kind text NOT NULL,
+          version text NOT NULL,
+          consented_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )`,
+        `CREATE INDEX IF NOT EXISTS user_consents_user_kind_idx ON user_consents (user_id, kind)`,
       ],
       "write",
     );
