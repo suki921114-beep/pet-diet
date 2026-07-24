@@ -3,6 +3,7 @@ import {
   computeNextServing,
   createPlanSnapshot,
   emptyDatabase,
+  feedStatus,
   localDate,
   localTime,
   nonNegative,
@@ -198,6 +199,21 @@ describe("3. 음수·비정상 값 차단", () => {
     expect(remaining(100, 40)).toBe(60);
     expect(remaining(100, 120)).toBe(0);
     expect(remaining(100, 100)).toBe(0);
+  });
+});
+
+describe("3-1. 0g 섭취 기록은 '완료'로 오해되지 않아야 한다", () => {
+  it("먹은 양이 0이면 '먹지 않음'이다", () => {
+    expect(feedStatus(makeFeedRecord({ offeredG: 100, eatenG: 0 }))).toBe("none");
+  });
+
+  it("먹은 양이 목표량보다 적으면 '일부 섭취'다", () => {
+    expect(feedStatus(makeFeedRecord({ offeredG: 100, eatenG: 40 }))).toBe("partial");
+  });
+
+  it("먹은 양이 목표량 이상이면 '섭취 완료'다(더 먹었어도 완료)", () => {
+    expect(feedStatus(makeFeedRecord({ offeredG: 100, eatenG: 100 }))).toBe("eaten");
+    expect(feedStatus(makeFeedRecord({ offeredG: 100, eatenG: 130 }))).toBe("eaten");
   });
 });
 

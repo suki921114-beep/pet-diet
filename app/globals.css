@@ -294,7 +294,7 @@ textarea:focus-visible {
 }
 
 .hero-action-card.compact .action-copy p {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .hero-action-card.compact .eyebrow {
@@ -418,7 +418,7 @@ textarea:focus-visible {
 }
 
 .button.small {
-  min-height: 36px;
+  min-height: 44px;
   padding: 7px 12px;
   border-radius: 11px;
   font-size: 12px;
@@ -507,7 +507,7 @@ textarea:focus-visible {
 .quick-health-head span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -654,6 +654,35 @@ textarea::placeholder {
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-title strong {
+  min-width: 0;
+}
+
+.status-pill {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-pill.status-partial {
+  background: rgb(201 121 77 / 16%);
+  color: var(--terracotta);
+}
+
+.status-pill.status-none {
+  background: rgb(227 78 78 / 12%);
+  color: var(--danger);
 }
 
 .activity-row div > span,

@@ -623,6 +623,19 @@ function feedBreakdownText(record: FeedRecord) {
   return `자연식 급여 ${fmt(record.naturalEatenG ?? 0)}g · 사료 급여 ${fmt(record.dryEatenG ?? 0)}g`;
 }
 
+// 먹은 양(eatenG)이 0g이어도 "급여를 기록했다"는 이유만으로 무조건 완료로
+// 취급하면, 실제로는 안 먹었는데 완료로 보이는 오해가 생긴다. 그래서 목표량
+// 대비 먹은 양을 기준으로 상태를 구분해 화면에 정확히 보여준다.
+export function feedStatus(record: FeedRecord): "eaten" | "partial" | "none" {
+  if (!(record.eatenG > 0)) return "none";
+  if (record.eatenG < record.offeredG) return "partial";
+  return "eaten";
+}
+
+function feedStatusLabel(status: "eaten" | "partial" | "none") {
+  return status === "none" ? "먹지 않음" : status === "partial" ? "일부 섭취" : "섭취 완료";
+}
+
 function IconButton({
   label,
   onClick,
@@ -1094,6 +1107,12 @@ export default function PetDietApp() {
   const todayPlan = db.dailyPlans[today];
   const planIsCurrent = todayPlan?.settingsHash === planSettingsHash(db);
   const completedPlanMeals = todayFeeds.filter((item) => item.source === "plan").length;
+  // 급여를 "시도"한 횟수(completedPlanMeals)와 실제로 "먹은" 횟수는 다를 수
+  // 있다. 0g을 먹었어도 급여 슬롯은 소모된 것으로 계산해야 다음 끼니 양이
+  // 정확히 재분배되지만, 화면에는 완료로 오해하지 않도록 따로 보여준다.
+  const eatenPlanMeals = todayFeeds.filter(
+    (item) => item.source === "plan" && feedStatus(item) === "eaten",
+  ).length;
 
   const nextServing = useMemo(
     () => computeNextServing(todayPlan, todayFeeds, completedPlanMeals),
@@ -1452,6 +1471,7 @@ export default function PetDietApp() {
           todayPlan={todayPlan}
           planIsCurrent={planIsCurrent}
           completedPlanMeals={completedPlanMeals}
+          eatenPlanMeals={eatenPlanMeals}
           nextServing={nextServing}
           applyTodayPlan={applyTodayPlan}
           recordPlannedMeal={() => recordPlannedMeal()}
@@ -1487,7 +1507,6 @@ export default function PetDietApp() {
         <FeedingPlanPage
           {...shared}
           plan={todayPlan}
-          planIsCurrent={planIsCurrent}
           applyTodayPlan={applyTodayPlan}
         />
       );
@@ -1583,6 +1602,7 @@ function HomePage({
   todayPlan,
   planIsCurrent,
   completedPlanMeals,
+  eatenPlanMeals,
   nextServing,
   applyTodayPlan,
   recordPlannedMeal,
@@ -1598,6 +1618,7 @@ function HomePage({
   todayPlan?: DailyPlan;
   planIsCurrent: boolean;
   completedPlanMeals: number;
+  eatenPlanMeals: number;
   nextServing: { remainingMeals: number; naturalG: number; dryG: number; kcal: number } | null;
   applyTodayPlan: (petOverride?: Pet) => void;
   recordPlannedMeal: () => void;
@@ -1732,7 +1753,8 @@ function HomePage({
               total={todayPlan?.feedings ?? db.pet.feedingsPerDay}
             />
             <span>
-              {completedPlanMeals}/{todayPlan?.feedings ?? db.pet.feedingsPerDay}회 완료
+              {completedPlanMeals}/{todayPlan?.feedings ?? db.pet.feedingsPerDay}회 급여 시도
+              {completedPlanMeals > 0 && ` · ${eatenPlanMeals}회 섭취`}
             </span>
           </div>
         </section>
@@ -1870,7 +1892,14 @@ function HomePage({
                   <div className="activity-row" key={record.id}>
                     <span className="activity-time">{record.datetime.slice(11, 16)}</span>
                     <div>
-                      <strong>{record.label}</strong>
+                      <span className="row-title">
+                        <strong>{record.label}</strong>
+                        {feedStatus(record) !== "eaten" && (
+                          <span className={`status-pill status-${feedStatus(record)}`}>
+                            {feedStatusLabel(feedStatus(record))}
+                          </span>
+                        )}
+                      </span>
                       <span>
                         목표 {fmt(record.offeredG)}g · 급여 {fmt(record.eatenG)}g ·{" "}
                         {fmt(record.calculatedKcal)}kcal
@@ -2576,6 +2605,7 @@ function MedicationPage({
   updateDb,
   back,
   home,
+  setToast,
   type,
   title,
 }: SharedProps & { type: Medication["type"]; title: string }) {
@@ -2622,6 +2652,21 @@ function MedicationPage({
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") ?? "").trim();
     if (!name) return;
+    // 재고·사용량은 음수를 조용히 0으로 보정하지 않고, 이유를 알려주고
+    // 저장 자체를 막는다.
+    if (dailyAmount.trim() && Number(dailyAmount) < 0) {
+      setToast("하루 총 사용량은 음수로 입력할 수 없어요.");
+      return;
+    }
+    const stockRaw = form.get("stock");
+    if (stockRaw !== null && String(stockRaw).trim() && Number(stockRaw) < 0) {
+      setToast("재고는 음수로 입력할 수 없어요.");
+      return;
+    }
+    if (stockPerDoseManual !== null && stockPerDoseManual.trim() && Number(stockPerDoseManual) < 0) {
+      setToast("1회당 재고 차감량은 음수로 입력할 수 없어요.");
+      return;
+    }
     const base = {
       type,
       name,
@@ -2664,16 +2709,17 @@ function MedicationPage({
           </div>
           <label>1회 급여 설명<input name="dose" defaultValue={editingMed?.dose ?? ""} placeholder={type === "supplement" ? "예: 하루 1캡슐 중 1/5회분" : "예: 1/2정"} /></label>
           <div className="field-grid">
-            <label>현재 재고<input name="stock" type="number" step="0.1" defaultValue={editingMed?.stock ?? ""} /></label>
+            <label>현재 재고<input name="stock" type="number" step="0.1" min="0" defaultValue={editingMed?.stock ?? ""} /></label>
             <label>재고 단위<input name="stockUnit" defaultValue={editingMed?.stockUnit ?? ""} placeholder="정, 캡슐, 포" /></label>
           </div>
-          <label>하루 총 사용량<input type="number" step="0.1" value={dailyAmount} onChange={(e) => setDailyAmount(e.target.value)} placeholder="예: 1 (캡슐 1개를 하루치로)" /></label>
+          <label>하루 총 사용량<input type="number" step="0.1" min="0" value={dailyAmount} onChange={(e) => setDailyAmount(e.target.value)} placeholder="예: 1 (캡슐 1개를 하루치로)" /></label>
           <label>
             1회당 재고 차감량
             <input
               name="stockPerDose"
               type="number"
               step="0.001"
+              min="0"
               value={stockPerDoseValue}
               onChange={(e) => setStockPerDoseManual(e.target.value)}
             />
@@ -2829,7 +2875,7 @@ function InventoryPage({ db, updateDb, back, home }: SharedProps) {
   );
 }
 
-function HealthPage({ db, updateDb, back, home }: SharedProps) {
+function HealthPage({ db, updateDb, back, home, setToast }: SharedProps) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [bcsInfoOpen, setBcsInfoOpen] = useState(false);
@@ -2854,9 +2900,22 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    // 체중은 빈칸(미입력)은 허용하되, 값을 입력했다면 0보다 커야 한다.
+    // 0 이하 값을 조용히 0으로 보정해서 저장하면 체중 추이 그래프가
+    // 깨지므로, 저장 자체를 막고 이유를 알려준다.
+    const weightRaw = form.get("weightKg");
+    let weightKg: number | null = null;
+    if (weightRaw && String(weightRaw).trim()) {
+      const parsedWeight = Number(weightRaw);
+      if (!Number.isFinite(parsedWeight) || parsedWeight <= 0) {
+        setToast("체중은 0보다 큰 값으로 입력해주세요.");
+        return;
+      }
+      weightKg = parsedWeight;
+    }
     const base = {
       datetime: `${String(form.get("date") || localDate())}T${String(form.get("time") || localTime())}`,
-      weightKg: form.get("weightKg") ? toNumber(form.get("weightKg")) : null,
+      weightKg,
       bcs: form.get("bcs") ? toNumber(form.get("bcs")) : null,
       appetite: String(form.get("appetite") || "normal") as HealthRecord["appetite"],
       vomitCount: toNumber(form.get("vomitCount")),
@@ -2904,7 +2963,7 @@ function HealthPage({ db, updateDb, back, home }: SharedProps) {
               <label>시간<input name="time" type="time" defaultValue={editingRow ? editingRow.datetime.slice(11, 16) : localTime()} /></label>
             </div>
             <div className="field-grid">
-              <label>체중(kg)<input name="weightKg" type="number" step="0.01" defaultValue={editingRow?.weightKg ?? ""} /></label>
+              <label>체중(kg)<input name="weightKg" type="number" step="0.01" min="0.01" defaultValue={editingRow?.weightKg ?? ""} /></label>
               <label>
                 <span className="label-with-info">
                   BCS(1–9)
@@ -3180,7 +3239,19 @@ function RecordsPage({
               {feeds.map((record) => (
                 <div className="record-row" key={record.id}>
                   <div className="record-symbol">{record.source === "snack" ? <Cookie size={18} /> : <UtensilsCrossed size={18} />}</div>
-                  <div><strong>{record.datetime.slice(11, 16)} · {record.label}</strong><span>목표 {fmt(record.offeredG)}g · 급여 {fmt(record.eatenG)}g · {fmt(record.calculatedKcal)}kcal</span>{feedBreakdownText(record) && <span className="breakdown">{feedBreakdownText(record)}</span>}{record.note && <small>{record.note}</small>}</div>
+                  <div>
+                    <span className="row-title">
+                      <strong>{record.datetime.slice(11, 16)} · {record.label}</strong>
+                      {feedStatus(record) !== "eaten" && (
+                        <span className={`status-pill status-${feedStatus(record)}`}>
+                          {feedStatusLabel(feedStatus(record))}
+                        </span>
+                      )}
+                    </span>
+                    <span>목표 {fmt(record.offeredG)}g · 급여 {fmt(record.eatenG)}g · {fmt(record.calculatedKcal)}kcal</span>
+                    {feedBreakdownText(record) && <span className="breakdown">{feedBreakdownText(record)}</span>}
+                    {record.note && <small>{record.note}</small>}
+                  </div>
                   <div className="row-actions"><IconButton label="수정" onClick={() => editFeed(record)}><Edit3 size={16} /></IconButton><IconButton label="삭제" onClick={() => deleteFeed(record)}><Trash2 size={16} /></IconButton></div>
                 </div>
               ))}
@@ -3209,11 +3280,9 @@ function FeedingPlanPage({
   home,
   today,
   plan,
-  planIsCurrent,
   applyTodayPlan,
 }: SharedProps & {
   plan?: DailyPlan;
-  planIsCurrent: boolean;
   applyTodayPlan: (petOverride?: Pet) => void;
 }) {
   const [pet, setPet] = useState(db.pet);
@@ -3225,6 +3294,11 @@ function FeedingPlanPage({
   const dryKcal = target - naturalKcal;
   const naturalG = batch?.kcalPer100 ? naturalKcal / batch.kcalPer100 * 100 : 0;
   const dryG = dry?.kcalPer100 ? dryKcal / dry.kcalPer100 * 100 : 0;
+  // 부모(PetDietApp)가 넘겨주는 planIsCurrent는 "저장된" db.pet 기준이라,
+  // 이 화면에서 아직 저장 전인 입력값(draft)을 바꿔도 갱신되지 않는다.
+  // 그래서 버튼 문구는 화면에 보이는 값 기준으로 별도 계산한다.
+  const draftPlanIsCurrent =
+    !!plan && plan.settingsHash === planSettingsHash({ ...db, pet: { ...pet, naturalRatio: ratio } });
 
   function saveSettings() {
     updateDb((current) => ({ ...current, pet: { ...pet, naturalRatio: ratio } }), "급여 설정을 저장했어요.");
@@ -3256,9 +3330,9 @@ function FeedingPlanPage({
             <div><span>1회분</span><strong>자연식 {fmt(naturalG / pet.feedingsPerDay, 1)}g · 사료 {fmt(dryG / pet.feedingsPerDay, 1)}g</strong></div>
           </div>
           <button className="button primary full" onClick={saveSettings}><Save size={18} /> 설정 저장</button>
-          <button className={`button full ${plan && planIsCurrent ? "success" : "ink"}`} onClick={() => applyTodayPlan(pet)}>
-            {plan && planIsCurrent ? <Check size={18} /> : <CalendarDays size={18} />}
-            {!plan ? "저장하고 오늘 계획에 적용" : planIsCurrent ? "오늘 계획 적용 완료" : "저장하고 오늘 계획 업데이트"}
+          <button className={`button full ${draftPlanIsCurrent ? "success" : "ink"}`} onClick={() => applyTodayPlan(pet)}>
+            {draftPlanIsCurrent ? <Check size={18} /> : <CalendarDays size={18} />}
+            {!plan ? "저장하고 오늘 계획에 적용" : draftPlanIsCurrent ? "오늘 계획 적용 완료" : "변경된 설정으로 오늘 계획 업데이트"}
           </button>
           <p className="form-note">이 버튼은 화면에 입력한 값을 먼저 저장한 뒤 오늘 계획에 적용해요. 위 &quot;설정 저장&quot;만 눌렀다면 아직 오늘 계획에는 반영되지 않아요.</p>
           {plan && <p className="form-note">{today} · 목표 {fmt(plan.targetKcal)}kcal · {plan.feedings}회 스냅샷</p>}
