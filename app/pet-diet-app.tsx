@@ -27,6 +27,7 @@ import {
   Search,
   Settings,
   ShieldAlert,
+  Smartphone,
   Sparkles,
   Trash2,
   Upload,
@@ -284,6 +285,11 @@ const LEGACY_KEY = "dogDietApp_v1";
 // 본체 데이터)와는 별도의 키에 저장한다. 그래야 반려동물을 전환해도 다른
 // 가족 구성원의 화면이 강제로 전환되지 않는다.
 const ACTIVE_PET_KEY = "petDietManager_activePetId";
+
+// PWA: 오프라인 상태를 알리는 동시에 "왜 지금 저장이 안 되는지"까지 설명하는
+// 문구. 상단 배너와, 오프라인 중 저장을 시도했을 때 뜨는 토스트에 그대로 재사용한다.
+const OFFLINE_MESSAGE =
+  "인터넷 연결이 끊겼어요. 기존 화면은 볼 수 있지만 새 기록은 저장할 수 없어요.";
 
 // 재료 목록은 강아지 자연식에 흔히 쓰는 "원재료·단순조리" 항목만 골라뒀다.
 // (양파·마늘·초콜릿·포도 등 강아지에게 위험한 재료, 라면·김치·젓갈처럼
@@ -1205,6 +1211,12 @@ export default function PetDietApp() {
   const [page, setPage] = useState<Page>("home");
   const [history, setHistory] = useState<Page[]>([]);
   const [toast, setToast] = useState("");
+  // PWA: 네트워크 연결 상태. 오프라인일 때는 updateDb 자체를 막아 서버 저장이
+  // 필요한 모든 기록(급여·복약·체중·건강 등)이 조용히 실패하거나 로컬에만
+  // 임시로 남는 일을 방지한다. 초기값은 true로 두고(SSR/첫 렌더 중에는
+  // navigator가 없음) 마운트 직후 useEffect에서 실제 값으로 바로잡는다.
+  const [isOnline, setIsOnline] = useState(true);
+  const wasOnlineRef = useRef(true);
   const [feedSheetOpen, setFeedSheetOpen] = useState(false);
   const [snackSheetOpen, setSnackSheetOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<FeedRecord | null>(null);
@@ -1267,6 +1279,31 @@ export default function PetDietApp() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  // PWA: 온/오프라인 전환을 감지한다. 오프라인 → 온라인으로 돌아올 때만
+  // "다시 연결됐어요" 토스트를 띄운다(최초 마운트 시 이미 온라인이었다면 띄우지 않음).
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    setIsOnline(navigator.onLine);
+    wasOnlineRef.current = navigator.onLine;
+
+    function handleOnline() {
+      if (!wasOnlineRef.current) setToast("인터넷에 다시 연결됐어요.");
+      wasOnlineRef.current = true;
+      setIsOnline(true);
+    }
+    function handleOffline() {
+      wasOnlineRef.current = false;
+      setIsOnline(false);
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   // 로그인 여부 + 가입한 가족 정보를 가져온다. 로그인 안 돼있으면 401이 오는데,
   // 그건 오류가 아니라 "가족 공유를 아직 안 쓴다"는 정상적인 상태다.
@@ -1548,6 +1585,13 @@ export default function PetDietApp() {
   }
 
   function updateDb(updater: (current: Database) => Database, message?: string) {
+    // PWA: 오프라인일 때는 서버 저장이 필요한 모든 기록 변경(급여·복약·체중·
+    // 건강 등)을 실행하지 않는다. 기존 온라인 저장 로직(setDb/setToast) 자체는
+    // 그대로 두고, 이 가드만 앞단에 추가한다.
+    if (!isOnline) {
+      setToast(OFFLINE_MESSAGE);
+      return;
+    }
     setDb((current) => updater(current));
     if (message) setToast(message);
   }
@@ -2028,6 +2072,11 @@ export default function PetDietApp() {
   return (
     <main className="app-stage">
       <div className={`app-frame ${page === "stats" ? "stats-mode" : ""}`}>
+        {!isOnline && (
+          <div className="offline-banner" role="status">
+            {OFFLINE_MESSAGE}
+          </div>
+        )}
         {content}
       </div>
       {toast && <Toast message={toast} />}
@@ -4139,6 +4188,8 @@ function SettingsPage({
           <input ref={importRef} className="hidden-input" type="file" accept="application/json" onChange={(e) => e.target.files?.[0] && importData(e.target.files[0])} />
         </section>
 
+        <InstallAppSection />
+
         {authState === "signed-in" && (
           <DangerZoneSection
             household={household}
@@ -4152,6 +4203,116 @@ function SettingsPage({
         )}
       </div>
     </>
+  );
+}
+
+// beforeinstallprompt는 표준 타입 정의에 아직 없어 최소한으로 직접 선언한다.
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
+const INSTALL_GUIDE_DISMISSED_KEY = "petDietManager_installGuideDismissed";
+
+// 설정 화면의 "홈 화면에 앱 설치" 항목.
+// - 이미 standalone(설치됨)으로 실행 중이면 섹션 전체를 숨긴다.
+// - Android/Chromium: beforeinstallprompt를 잡아뒀다가 버튼 클릭 시에만
+//   시스템 설치 다이얼로그를 띄운다. 브라우저의 자체 설치 배너 동작에는 관여하지 않는다.
+// - iPhone/iPad(Safari): 자동 설치 다이얼로그가 없으므로 안내 문구를 보여주고,
+//   한 번 닫으면 localStorage에 기록해 다시 뜨지 않게 한다.
+function InstallAppSection() {
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [iosGuideDismissed, setIosGuideDismissed] = useState(true);
+  const [installBusy, setInstallBusy] = useState(false);
+  const [installNotice, setInstallNotice] = useState("");
+
+  useEffect(() => {
+    const standalone =
+      window.matchMedia?.("(display-mode: standalone)").matches ||
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+    setIsStandalone(Boolean(standalone));
+    setIsIOS(/iphone|ipad|ipod/i.test(window.navigator.userAgent));
+    try {
+      setIosGuideDismissed(window.localStorage.getItem(INSTALL_GUIDE_DISMISSED_KEY) === "1");
+    } catch {
+      setIosGuideDismissed(false);
+    }
+
+    function handleBeforeInstallPrompt(event: Event) {
+      // 브라우저의 기본 설치 미니인포바를 막고, 우리 설정 화면의 버튼 클릭에
+      // 맞춰 나중에 직접 띄운다(spec: 반복적으로 강제 노출하지 않기).
+      event.preventDefault();
+      setDeferredPrompt(event as BeforeInstallPromptEvent);
+    }
+    function handleAppInstalled() {
+      setDeferredPrompt(null);
+      setIsStandalone(true);
+    }
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  async function handleInstallClick() {
+    if (!deferredPrompt) return;
+    setInstallBusy(true);
+    try {
+      await deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      setInstallNotice(choice.outcome === "accepted" ? "설치를 시작했어요." : "설치를 나중에 하기로 했어요.");
+      setDeferredPrompt(null);
+    } finally {
+      setInstallBusy(false);
+    }
+  }
+
+  function dismissIosGuide() {
+    setIosGuideDismissed(true);
+    try {
+      window.localStorage.setItem(INSTALL_GUIDE_DISMISSED_KEY, "1");
+    } catch {
+      // localStorage를 쓸 수 없어도 이번 화면에서는 닫힌 상태를 유지한다.
+    }
+  }
+
+  if (isStandalone) return null;
+  const showIosGuide = isIOS && !deferredPrompt && !iosGuideDismissed;
+  if (!deferredPrompt && !showIosGuide) return null;
+
+  return (
+    <section className="form-section">
+      <h2>앱 설치</h2>
+      <div className="settings-list">
+        <div className="settings-row">
+          <div className="settings-row-label">
+            <strong>홈 화면에 앱 설치</strong>
+            <small>
+              {deferredPrompt
+                ? "홈 화면에 추가하면 앱처럼 바로 열 수 있어요."
+                : "Safari의 공유 버튼을 누른 뒤 '홈 화면에 추가'를 선택하고 '웹 앱으로 열기'를 켜주세요."}
+            </small>
+          </div>
+          <div className="settings-row-actions">
+            {deferredPrompt ? (
+              <button className="button secondary small" disabled={installBusy} onClick={handleInstallClick}>
+                <Smartphone size={16} /> 설치
+              </button>
+            ) : (
+              <IconButton label="설치 안내 닫기" onClick={dismissIosGuide}>
+                <X size={18} />
+              </IconButton>
+            )}
+          </div>
+        </div>
+      </div>
+      {installNotice && <p className="form-note">{installNotice}</p>}
+    </section>
   );
 }
 

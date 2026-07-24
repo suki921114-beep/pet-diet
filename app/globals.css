@@ -2291,3 +2291,60 @@ input[type="range"] {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* PWA: 오프라인 상태 배너. 온라인 상태로 돌아오면 즉시 사라지고,
+   재연결 안내는 기존 toast로 대체한다(자동 소멸이 더 알맞아서). */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  background: #4b4744;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* PWA: 새 버전 업데이트 안내 배너. 기존 .toast와 같은 시각 언어를 쓰되,
+   자동으로 사라지지 않고 사용자가 "나중에"/"지금 업데이트"를 눌러야 없어진다. */
+.sw-update-banner {
+  position: fixed;
+  right: 18px;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  left: 18px;
+  z-index: 110;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: min(calc(100% - 36px), 440px);
+  margin: 0 auto;
+  padding: 14px 16px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 16px;
+  background: #242522;
+  box-shadow: 0 12px 34px rgb(0 0 0 / 25%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.sw-update-banner span {
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.sw-update-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* PWA: 반려동물 전환 시트도 다른 bottom-sheet류와 동일하게 하단 safe-area를 확보한다. */
+.pet-switch-sheet {
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+}
