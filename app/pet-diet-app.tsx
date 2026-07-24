@@ -17,7 +17,9 @@ import {
   Edit3,
   HeartPulse,
   Home,
+  KeyRound,
   LogOut,
+  Mail,
   PackageCheck,
   PawPrint,
   Pill,
@@ -1021,6 +1023,37 @@ export default function PetDietApp() {
     // setState하는 통상적인 데이터 패칭 패턴이라 의도적으로 사용한다.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshHousehold();
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    // Google 로그인/연결이 끝나고 이 페이지로 돌아왔을 때(app/api/auth/google/*
+    // 라우트가 붙여준 쿼리스트링) 결과를 토스트로 보여주고 URL은 깨끗하게 되돌린다.
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get("authError");
+    const googleLinked = params.get("googleLinked");
+    if (!authError && !googleLinked) return;
+
+    const messages: Record<string, string> = {
+      login_required: "먼저 로그인해주세요.",
+      reauth_required: "본인 확인이 만료됐어요. 비밀번호를 다시 확인해주세요.",
+      google_unavailable: "지금은 Google 로그인을 사용할 수 없어요.",
+      google_cancelled: "Google 로그인을 취소했어요.",
+      google_error: "Google 로그인 중 문제가 발생했어요.",
+      google_expired: "로그인 시도 시간이 지났어요. 다시 시도해주세요.",
+      google_email_unverified: "Google 계정의 이메일이 인증되지 않았어요.",
+      google_email_in_use: "이미 같은 이메일로 가입된 계정이 있어요. 비밀번호로 로그인한 뒤 계정 설정에서 Google을 연결해주세요.",
+      google_already_linked: "이 Google 계정은 이미 다른 계정에 연결되어 있어요.",
+      account_unavailable: "이용할 수 없는 계정이에요.",
+    };
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setToast(
+      googleLinked ? "Google 계정을 연결했어요." : messages[authError ?? ""] ?? "처리하지 못했어요.",
+    );
+    const url = new URL(window.location.href);
+    url.searchParams.delete("authError");
+    url.searchParams.delete("googleLinked");
+    window.history.replaceState(null, "", url.pathname + url.search);
   }, [hydrated]);
 
   // 가족에 가입돼있으면: 처음 한 번 서버 데이터를 받아오고, 이후 주기적으로 폴링한다.
@@ -3478,6 +3511,241 @@ function SettingsPage({
   );
 }
 
+type AccountInfo = {
+  user: { id: string; email: string; displayName: string | null };
+  emailVerified: boolean;
+  hasPassword: boolean;
+  providers: string[];
+};
+
+// 로그인 방법(비밀번호/Google), 이메일 인증 상태를 보여주고 바꿀 수 있는
+// 영역. household(가족)와는 별개로 /api/auth/me에서 정보를 가져온다.
+function AccountSettingsSection({ authState }: { authState: AuthState }) {
+  const [info, setInfo] = useState<AccountInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthPassword, setReauthPassword] = useState("");
+
+  async function loadInfo() {
+    try {
+      const res = await fetch("/api/auth/me");
+      if (!res.ok) return;
+      setInfo((await res.json()) as AccountInfo);
+    } catch {
+      // 계정 부가정보는 못 가져와도 앱 사용 자체에는 지장이 없어 조용히 넘어간다.
+    }
+  }
+
+  useEffect(() => {
+    if (authState === "signed-in") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      loadInfo();
+    } else {
+      setInfo(null);
+    }
+  }, [authState]);
+
+  async function resendVerification() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/auth/resend-verification", { method: "POST" });
+      const payload = (await res.json()) as { error?: string; alreadyVerified?: boolean };
+      if (!res.ok) {
+        setError(payload.error ?? "재전송에 실패했어요.");
+        return;
+      }
+      setNotice(payload.alreadyVerified ? "이미 인증된 이메일이에요." : "인증 메일을 다시 보냈어요.");
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitPasswordChange(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "변경하지 못했어요.");
+        return;
+      }
+      setNotice("비밀번호를 저장했어요.");
+      setCurrentPassword("");
+      setNewPassword("");
+      setShowPasswordForm(false);
+      loadInfo();
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitReauthAndLink(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/reauth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: reauthPassword }),
+      });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "확인하지 못했어요.");
+        setBusy(false);
+        return;
+      }
+      window.location.href = "/api/auth/google/start?mode=link&next=%2F";
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+      setBusy(false);
+    }
+  }
+
+  async function disconnectGoogle() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/auth/google/disconnect", { method: "POST" });
+      const payload = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(payload.error ?? "연결 해제에 실패했어요.");
+        return;
+      }
+      setNotice("Google 연결을 해제했어요.");
+      loadInfo();
+    } catch {
+      setError("네트워크 오류가 발생했어요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (authState !== "signed-in" || !info) return null;
+
+  const googleLinked = info.providers.includes("google");
+
+  return (
+    <div className="menu-group">
+      <div className="menu-row">
+        <span className="menu-icon"><Mail size={18} /></span>
+        <span>
+          <strong>{info.user.email}</strong>
+          <small>{info.emailVerified ? "이메일 인증됨" : "이메일 인증 필요"}</small>
+        </span>
+      </div>
+      {!info.emailVerified && (
+        <button className="button secondary full" disabled={busy} onClick={resendVerification}>
+          인증 메일 다시 보내기
+        </button>
+      )}
+      <div className="menu-row">
+        <span className="menu-icon"><KeyRound size={18} /></span>
+        <span>
+          <strong>비밀번호 로그인</strong>
+          <small>{info.hasPassword ? "설정됨" : "설정 안 됨"}</small>
+        </span>
+      </div>
+      <button
+        className="button secondary full"
+        disabled={busy}
+        onClick={() => setShowPasswordForm((value) => !value)}
+      >
+        {info.hasPassword ? "비밀번호 변경" : "비밀번호 설정"}
+      </button>
+      {showPasswordForm && (
+        <form onSubmit={submitPasswordChange} className="field-grid compact">
+          {info.hasPassword && (
+            <label>
+              현재 비밀번호
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+              />
+            </label>
+          )}
+          <label>
+            새 비밀번호
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              minLength={8}
+              placeholder="8자 이상"
+              required
+            />
+          </label>
+          <button className="button primary full" type="submit" disabled={busy}>
+            저장
+          </button>
+        </form>
+      )}
+      <div className="menu-row">
+        <span className="menu-icon"><Users size={18} /></span>
+        <span>
+          <strong>Google 로그인</strong>
+          <small>{googleLinked ? "연결됨" : "연결 안 됨"}</small>
+        </span>
+      </div>
+      {googleLinked ? (
+        <button className="button secondary full" disabled={busy} onClick={disconnectGoogle}>
+          Google 연결 해제
+        </button>
+      ) : info.hasPassword ? (
+        showReauth ? (
+          <form onSubmit={submitReauthAndLink} className="field-grid compact">
+            <label>
+              비밀번호 확인
+              <input
+                type="password"
+                value={reauthPassword}
+                onChange={(e) => setReauthPassword(e.target.value)}
+                required
+              />
+            </label>
+            <button className="button primary full" type="submit" disabled={busy}>
+              확인하고 Google 연결하기
+            </button>
+          </form>
+        ) : (
+          <button className="button secondary full" disabled={busy} onClick={() => setShowReauth(true)}>
+            Google 연결하기
+          </button>
+        )
+      ) : (
+        <p className="form-note">비밀번호를 먼저 설정하면 Google 계정을 연결할 수 있어요.</p>
+      )}
+      {notice && <p className="form-note">{notice}</p>}
+      {error && (
+        <div className="inline-alert">
+          <ShieldAlert size={18} /> {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FamilySharingSection({
   authState,
   household,
@@ -3514,6 +3782,7 @@ function FamilySharingSection({
       <h2><Users size={18} /> 가족 공유</h2>
       {authState === "checking" && <p className="form-note">로그인 상태를 확인하는 중…</p>}
       {authState === "signed-out" && <AuthForm onAuthChange={onAuthChange} />}
+      {authState === "signed-in" && <AccountSettingsSection authState={authState} />}
       {authState === "signed-in" && !household && (
         <>
           <p className="form-note">
@@ -3599,18 +3868,40 @@ function FamilySharingSection({
 }
 
 function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  function switchMode(next: "login" | "signup" | "forgot") {
+    setMode(next);
+    setError("");
+    setNotice("");
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
+    setNotice("");
     try {
+      if (mode === "forgot") {
+        const res = await fetch("/api/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const payload = (await res.json()) as { error?: string; message?: string };
+        if (!res.ok) {
+          setError(payload.error ?? "처리하지 못했어요. 다시 시도해주세요.");
+          return;
+        }
+        setNotice(payload.message ?? "해당 이메일로 가입된 계정이 있다면, 재설정 링크를 보냈어요.");
+        return;
+      }
       const res = await fetch(mode === "login" ? "/api/auth/login" : "/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3618,10 +3909,17 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
           mode === "login" ? { email, password } : { email, password, displayName },
         ),
       });
-      const payload = (await res.json()) as { error?: string };
+      const payload = (await res.json()) as { error?: string; emailVerificationSent?: boolean };
       if (!res.ok) {
         setError(payload.error ?? "처리하지 못했어요. 다시 시도해주세요.");
         return;
+      }
+      if (mode === "signup") {
+        setNotice(
+          payload.emailVerificationSent
+            ? "가입됐어요. 이메일함에서 인증 링크를 확인해주세요."
+            : "가입됐어요. 인증 메일은 아직 보내지 못했어요 — 나중에 계정 설정에서 다시 보낼 수 있어요.",
+        );
       }
       onAuthChange();
     } catch {
@@ -3631,34 +3929,26 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
     }
   }
 
+  function continueWithGoogle() {
+    window.location.href = "/api/auth/google/start?next=%2F";
+  }
+
   return (
     <form onSubmit={submit}>
       <p className="form-note">
         가족과 기록을 함께 보려면 먼저 로그인해주세요. 계정이 없다면 회원가입으로 새로 만들 수
         있어요.
       </p>
-      <div className="tab-toggle">
-        <button
-          type="button"
-          className={mode === "login" ? "active" : ""}
-          onClick={() => {
-            setMode("login");
-            setError("");
-          }}
-        >
-          로그인
-        </button>
-        <button
-          type="button"
-          className={mode === "signup" ? "active" : ""}
-          onClick={() => {
-            setMode("signup");
-            setError("");
-          }}
-        >
-          회원가입
-        </button>
-      </div>
+      {mode !== "forgot" && (
+        <div className="tab-toggle">
+          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>
+            로그인
+          </button>
+          <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => switchMode("signup")}>
+            회원가입
+          </button>
+        </div>
+      )}
       {mode === "signup" && (
         <label>
           이름(표시용)
@@ -3679,25 +3969,43 @@ function AuthForm({ onAuthChange }: { onAuthChange: () => void }) {
           required
         />
       </label>
-      <label>
-        비밀번호
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder={mode === "signup" ? "8자 이상" : ""}
-          minLength={mode === "signup" ? 8 : undefined}
-          required
-        />
-      </label>
+      {mode !== "forgot" && (
+        <label>
+          비밀번호
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={mode === "signup" ? "8자 이상" : ""}
+            minLength={mode === "signup" ? 8 : undefined}
+            required
+          />
+        </label>
+      )}
+      {notice && <p className="form-note">{notice}</p>}
       {error && (
         <div className="inline-alert">
           <ShieldAlert size={18} /> {error}
         </div>
       )}
       <button className="button primary full" type="submit" disabled={busy}>
-        {mode === "login" ? "로그인" : "회원가입"}
+        {mode === "login" ? "로그인" : mode === "signup" ? "회원가입" : "재설정 링크 보내기"}
       </button>
+      {mode === "login" && (
+        <button type="button" className="button secondary full" onClick={() => switchMode("forgot")}>
+          비밀번호를 잊으셨나요?
+        </button>
+      )}
+      {mode === "forgot" && (
+        <button type="button" className="button secondary full" onClick={() => switchMode("login")}>
+          로그인으로 돌아가기
+        </button>
+      )}
+      {mode !== "forgot" && (
+        <button type="button" className="button secondary full" onClick={continueWithGoogle}>
+          Google로 계속하기
+        </button>
+      )}
     </form>
   );
 }

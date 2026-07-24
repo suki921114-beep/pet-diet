@@ -33,10 +33,23 @@ export function getDb() {
 // 수동 마이그레이션 명령 없이 바로 동작하게 한다.
 let schemaReady: Promise<void> | null = null;
 
+// SQLite는 "컬럼이 없으면 추가"를 지원하지 않아서(ADD COLUMN IF NOT EXISTS 없음),
+// 이미 있는 컬럼에 다시 추가를 시도하면 "duplicate column name" 에러가 난다.
+// 그 에러만 무시하고 그 외 에러는 그대로 던져서, 여러 번 배포해도 안전하게
+// 재실행 가능한 마이그레이션이 되도록 한다.
+async function addColumnIfMissing(c: Client, sqlText: string) {
+  try {
+    await c.execute(sqlText);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("duplicate column name")) throw error;
+  }
+}
+
 export async function getReadyDb() {
   const c = getClient();
-  schemaReady ??= c
-    .batch(
+  schemaReady ??= (async () => {
+    await c.batch(
       [
         `CREATE TABLE IF NOT EXISTS users (
           id text PRIMARY KEY NOT NULL,
@@ -66,15 +79,53 @@ export async function getReadyDb() {
           joined_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
         )`,
         `CREATE UNIQUE INDEX IF NOT EXISTS household_members_household_email_idx ON household_members (household_id, user_email)`,
+        `CREATE TABLE IF NOT EXISTS auth_accounts (
+          id text PRIMARY KEY NOT NULL,
+          user_id text NOT NULL,
+          provider text NOT NULL,
+          provider_subject text,
+          created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS auth_accounts_provider_subject_idx ON auth_accounts (provider, provider_subject)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS auth_accounts_user_provider_idx ON auth_accounts (user_id, provider)`,
+        `CREATE TABLE IF NOT EXISTS auth_sessions (
+          id text PRIMARY KEY NOT NULL,
+          user_id text NOT NULL,
+          token_hash text NOT NULL,
+          created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          expires_at text NOT NULL,
+          revoked_at text
+        )`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_token_hash_idx ON auth_sessions (token_hash)`,
+        `CREATE TABLE IF NOT EXISTS auth_tokens (
+          id text PRIMARY KEY NOT NULL,
+          purpose text NOT NULL,
+          token_hash text NOT NULL,
+          user_id text NOT NULL,
+          email text NOT NULL,
+          expires_at text NOT NULL,
+          used_at text,
+          created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS auth_tokens_token_hash_idx ON auth_tokens (token_hash)`,
+        `CREATE TABLE IF NOT EXISTS rate_limit_hits (
+          id text PRIMARY KEY NOT NULL,
+          key text NOT NULL,
+          created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )`,
       ],
       "write",
-    )
-    .then(() => undefined)
-    .catch((error) => {
-      // 다음 요청에서 다시 시도할 수 있도록 실패는 캐시하지 않는다.
-      schemaReady = null;
-      throw error;
-    });
+    );
+    // users 테이블은 이미 운영 중일 수 있어 CREATE TABLE IF NOT EXISTS로는
+    // 새 컬럼이 추가되지 않는다. 기존 행을 건드리지 않는 단순 ADD COLUMN만
+    // 사용해 하위 호환을 유지한다(NOT NULL 제약을 바꾸는 테이블 재구축은 하지 않음).
+    await addColumnIfMissing(c, `ALTER TABLE users ADD COLUMN email_verified_at text`);
+    await addColumnIfMissing(c, `ALTER TABLE users ADD COLUMN deleted_at text`);
+  })().catch((error) => {
+    // 다음 요청에서 다시 시도할 수 있도록 실패는 캐시하지 않는다.
+    schemaReady = null;
+    throw error;
+  });
   await schemaReady;
   return drizzle(c, { schema });
 }
